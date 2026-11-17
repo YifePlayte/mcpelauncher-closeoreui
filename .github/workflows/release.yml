@@ -103,6 +103,10 @@ jobs:
           path: dist/*.tar.gz
 
       - name: Publish release
+        # Only tag pushes publish. A manual run is for checking that the build
+        # works — it must not create a release, otherwise every debugging run
+        # leaves a bogus tag behind (which is exactly what happened).
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TESTED_WITH: ${{ inputs.tested_with }}
