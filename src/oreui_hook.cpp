@@ -10,30 +10,32 @@
 namespace coui {
 namespace {
 
-// Signature recovered from the upstream mod: the registration function takes the
-// OreUIConfig map by reference in x0 and several further opaque arguments.
-//
-// Declaring them as void* is deliberate — the detour never touches them, and a
-// wrong guess only matters if the ABI class of an argument changes, which it
-// cannot for pointers.
+// The registration function takes the OreUIConfig map by reference as its first
+// argument — in the x86-64 System V ABI that is %rdi, not AArch64's x0. The other
+// five are opaque: the detour forwards them untouched, so their exact types do not
+// matter as long as they stay pointer-sized.
 using ConfigFunction = void (*)(OreUIConfigMap&, void*, void*, void*, void*, void*);
 
 InlineHook gHook;
 ConfigFunction gOrigin = nullptr;
 std::atomic<uint32_t> gApplyCount{0};
-bool gWarnedBadMap = false;
+std::atomic<bool> gWarnedBadMap{false};
 
 void detour(OreUIConfigMap& configs, void* a2, void* a3, void* a4, void* a5, void* a6) {
     // Run the game's own registration first. Everything the map is supposed to
     // contain is in place afterwards, including entries this mod has no opinion
     // about.
+    //
+    // The map is not validated before this call on purpose: forwarding an argument
+    // the game handed us is always safe, whereas probing it first would read
+    // arbitrary memory if we had hooked the wrong function, turning a wrong guess
+    // into a crash.
     if (gOrigin != nullptr) {
         gOrigin(configs, a2, a3, a4, a5, a6);
     }
 
     if (!looksLikeConfigMap(&configs)) {
-        if (!gWarnedBadMap) {
-            gWarnedBadMap = true;
+        if (!gWarnedBadMap.exchange(true)) {
             logError("config map pointer %p looks invalid; leaving the map untouched",
                      static_cast<void*>(&configs));
         }

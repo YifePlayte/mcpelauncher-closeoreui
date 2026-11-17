@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <climits>
 #include <cstring>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -136,6 +137,11 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     }
 
     // Collect whole instructions until the patch fits.
+    //
+    // The loop guard plus the post-decode bound keep `covered` under the size of
+    // savedBytes_. A single x86 instruction can be 15 bytes, so checking only
+    // before decoding is not enough: `covered` could otherwise jump past the
+    // buffer and memcpy() below would overflow.
     std::vector<InsnInfo> insns;
     size_t covered = 0;
     while (covered < patchSize) {
@@ -145,11 +151,23 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
         }
         InsnInfo info = decode(code + covered);
         if (!info.valid) {
-            error = "undecodable instruction in prologue";
+            // Report the bytes: an unknown opcode at this point means the decoder
+            // does not cover something in this build's prologue, which is worth
+            // seeing in a bug report rather than only "cannot hook".
+            char hex[3 * 8 + 1] = {0};
+            for (int b = 0; b < 8 && covered + b < kMaxPrologue; ++b) {
+                snprintf(hex + b * 3, 4, "%02x ", code[covered + b]);
+            }
+            error = std::string("undecodable instruction in prologue at +") +
+                    std::to_string(covered) + ": " + hex;
             return false;
         }
         if (!info.relocatable()) {
             error = "prologue contains a position dependent instruction";
+            return false;
+        }
+        if (covered + info.len > kMaxPrologue) {
+            error = "instruction at the end of the patch window would exceed it";
             return false;
         }
         insns.push_back(info);
@@ -225,8 +243,9 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     }
     flushCode(trampAddr, covered + kAbsJumpSize);
 
-    *original = trampoline_;
-
+    // `*original` is deliberately assigned only after the patch is in place: a
+    // caller that sees install() fail must not be handed a trampoline for a hook
+    // that was never applied.
     if (!makeWritable(target, covered)) {
         error = std::string("mprotect failed: ") + strerror(errno);
         return false;
@@ -247,6 +266,7 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     memcpy(reinterpret_cast<void*>(target), patch, covered);
     flushCode(target, covered);
 
+    *original = trampoline_;
     target_ = target;
     installed_ = true;
     logDebug("hook installed: target=%p detour=%p trampoline=%p prologue=%zu (%s)", 
