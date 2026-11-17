@@ -45,4 +45,13 @@ const ModConfig& currentConfig();
 // Flips the master switch and writes the config back to disk.
 void setEnabled(bool enabled);
 
+// Sets the value used for every screen without an override, and writes back.
+// false forces the legacy JSON-UI, which is what this mod is for.
+void setDefaultScreenValue(bool legacyUi);
+
+// Pins one screen to the given value, overriding defaultScreenValue, and writes
+// back. Delete the entry from config.json to make the screen follow the default
+// again.
+void setScreenOverride(const std::string& screen, bool value);
+
 }  // namespace coui

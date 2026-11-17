@@ -22,9 +22,8 @@ __attribute__((visibility("default"))) void mod_preinit() {
     coui::logInfo("CloseOreUI preinit (mod %s, target %s/%s)", CLOSEOREUI_MOD_VERSION,
                   coui::kPlatform, coui::kSupportedAbi);
 
-    // The config has to be loaded before the menu can show its current state.
-    coui::reloadConfig();
-    coui::installMenu();
+    // Nothing to do yet: the config is read in mod_init, and the menu can only be
+    // registered once the game's screen list is known, which happens later still.
 }
 
 __attribute__((visibility("default"))) void mod_init() {
