@@ -139,26 +139,82 @@ cp build/x86_64/libcloseoreui.so ~/.var/app/io.mrarm.mcpelauncher/data/mcpelaunc
 }
 ```
 
-| 字段 | 作用 |
+只有三个字段，但其中两个开关的含义容易混淆，这里说清它们的真实语义
+（依据是 `src/oreui_config.cpp` 与 `src/config.cpp` 的实际数据流，不是命名猜测）。
+
+### `enabled`
+
+**这个模组本身是否工作。**
+
+`false` 时 `applyConfigToMap()` 直接返回，游戏配置表**完全不碰**——界面渲染什么
+就完全由游戏自己决定，等同于没装这个模组。用来临时停用而不必删文件。
+
+注意：它**不是**"关闭 OreUI"的开关。想关 OreUI 要用下一个字段。
+
+### `defaultScreenValue`
+
+**每个界面被强制成的值。** 这才是真正决定 UI 的开关。
+
+这个值会写进游戏每个界面的判定器。游戏把判定器返回 `true` 理解为
+"这个界面使用 OreUI"，因此：
+
+| 值 | 界面表现 |
 |---|---|
-| `enabled` | 总开关。`false` 时加载但不碰游戏 |
-| `defaultScreenValue` | 所有界面的默认值。`false`（默认）＝关掉 OreUI |
-| `screens` | 按界面覆盖，键为路由串 |
+| `false`（默认） | 旧 JSON-UI |
+| `true` | 新版 OreUI（等于不干预） |
+
+前提是 `enabled` 为 `true`；`enabled` 为 `false` 时本字段不起任何作用。
+
+实测确认：`{"enabled": true, "defaultScreenValue": false}` 时日志输出
+`applied OreUI config to 30 screens`，30 个界面全部切到旧 UI。
+
+### `screens`
+
+**逐界面例外**，键是游戏注册的原始路由串。列在这里的界面忽略
+`defaultScreenValue`，用自己的值。
 
 ```json
 {
+    "enabled": true,
+    "defaultScreenValue": false,
     "screens": {
-        "/main-menu": false,
         "/settings": true
     }
 }
 ```
 
-可用界面名即运行日志里被改写的 key。1.26.62.1 共 30 个，包含 `/main-menu`、
+上例：默认全部用旧 UI，但 `/settings` 保留新版界面。
+
+可用界面名就是运行日志里被改写的 key。1.26.62.1 共 30 个，包含 `/main-menu`、
 `/play`、`/settings`、`/edit-world`、`/safezone`、`/create-new-world`、
 `/player-permissions`、`/send-invites`、`/pre-start`、`/oreui-marketplace/search` 等。
+设置 `CLOSEOREUI_DEBUG=1` 可在日志里看到完整列表。
 
-改完存盘即生效，无需重启。
+### 生效时机
+
+判定器（每个界面的开关）只在**游戏构建配置表时**写入一次，而且游戏对每个判定器
+**只求值一次**——实测在 45 秒的运行里总共只调用 1 次，之后它把结果缓存进自己的结构。
+
+这意味着实时切换在实现上不可能：即使判定器每次都返回新值，游戏也不会再问它。
+所以：
+
+- 改完 `config.json` 后，**需要重启游戏**才会重新读取并安装；
+- 因此菜单里没有"重载"项：它只能把文件读进内存，无法重新应用到已构建好的界面，
+  提供了反而会让人以为改了就能立刻生效。
+
+这一点与上游 ForceCloseOreUI 相同：它同样在注册函数返回后改一次，改配置也要重启。
+
+内置菜单改的字段与文件一致：
+
+| 菜单项 | 对应字段 |
+|---|---|
+| `Mod enabled` | `enabled` |
+| `Force legacy UI (disable OreUI)` | `defaultScreenValue`（勾选 = `false`） |
+
+第二项的对勾含义与模组名一致：**勾上 = 旧版界面**，即模组正在起作用。
+
+菜单点击会立即写入 `config.json`，但同样需要重启游戏才生效。
+`screens` 目前只能改文件——逐界面覆盖有 30 项，菜单放不下。
 
 ## 诊断
 
