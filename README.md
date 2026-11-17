@@ -88,7 +88,25 @@ ELF 与 `.eh_frame` 解析，因此不需要 nlohmann/json、funchook、capstone
 
 ### 许可
 
-AGPL-3.0（见 [LICENSE](LICENSE)），与 closeoreUI-signature 保持一致。
+**GNU Affero General Public License v3.0**（见 [LICENSE](LICENSE)）。
+
+选择 AGPL 而非 GPL/MIT 的原因与代码来源无关——本项目没有复制 closeoreUI-signature
+的代码，其工具针对 AArch64 特征码推导，与这里的 x86-64 结构定位不共享实现。
+一致性选在理念上：AGPL 第 13 条要求**通过网络提供服务时也要公开修改后的源码**。
+按路由结构定位游戏函数的这套逻辑，如果被包成「上传 .so 返回可用信息」的在线服务，
+修改必须回流。
+
+对你的实际影响：
+
+| 场景 | 需要做什么 |
+|---|---|
+| 自己用、装在本地玩游戏 | 不需要做任何事 |
+| 分发修改版（含二进制） | 提供完整对应源码，保留许可与版权声明 |
+| 把它做成网络服务 | 同样需要公开服务端修改后的源码 |
+
+仅使用本模组（不修改、不再分发）不触发任何开源义务。
+
+发布包（`.tar.gz`）内含 LICENSE 全文，符合 AGPL 第 6 条对二进制分发的要求。
 
 ## 安装
 
