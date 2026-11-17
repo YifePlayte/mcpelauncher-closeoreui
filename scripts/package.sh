@@ -26,29 +26,30 @@ cp "$SO" "$OUTDIR/"
 cp LICENSE "$OUTDIR/"
 
 cat > "$OUTDIR/README.txt" <<'EOF'
-CloseOreUI — 关闭 Minecraft 基岩版 OreUI 的 mcpelauncher 模组
-=============================================================
+CloseOreUI — disable OreUI in Minecraft Bedrock for mcpelauncher
+===============================================================
 
-安装
-----
-把 libcloseoreui.so 放到 mcpelauncher 的 mods 目录：
+Install
+-------
+Put libcloseoreui.so into mcpelauncher's mods directory:
 
-  原生:    ~/.local/share/mcpelauncher/mods/
-  Flatpak: ~/.var/app/io.mrarm.mcpelauncher/data/mcpelauncher/mods/
+  native:  ~/.local/share/mcpelauncher/mods/
+  flatpak: ~/.var/app/io.mrarm.mcpelauncher/data/mcpelauncher/mods/
 
-启动游戏后会自动在同级 CloseOreUI/config.json 生成配置。
-想确认是否生效，可设 CLOSEOREUI_DEBUG=1 查看日志中的
-"OreUI config function at ..." 与 "screens patched" 两行。
+A config file is created next to the mod at CloseOreUI/config.json on first run.
+To confirm it worked, set CLOSEOREUI_DEBUG=1 and look for these log lines:
 
-本模组不绑定特定游戏版本：目标函数在启动时按结构定位。
-但行为层依赖一定的内存布局，若某版本失效，日志会给出明确原因。
+  "OreUI config function at ..."
+  "screens patched"
 
-本包只包含模组本身，不含任何 Minecraft 文件。
+This mod is not tied to a specific game version: the target function is located
+structurally at load time. The behavioural layer does assume a certain memory
+layout, so if a version ever breaks, the log will say why.
 
-许可
-----
-GNU Affero General Public License v3.0，全文见同目录 LICENSE。
-对应源码可从发布该版本的仓库获取。
+If the launcher was built with the menu API, an entry appears under
+Mods > CloseOreUI with a master switch.
+
+This package contains the mod only. No Minecraft files are included.
 EOF
 
 ( cd "$OUTDIR" && sha256sum libcloseoreui.so > SHA256SUMS.txt )

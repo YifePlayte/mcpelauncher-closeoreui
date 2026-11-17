@@ -1,6 +1,7 @@
 #include "oreui_config.h"
 
 #include "config.h"
+#include "json.h"
 #include "log.h"
 
 #include <cerrno>
@@ -89,6 +90,42 @@ bool looksLikeConfigMap(const void* candidate) {
 
 const std::string& configFilePath() {
     return gConfigPath;
+}
+
+const ModConfig& currentConfig() {
+    return gConfig;
+}
+
+void setEnabled(bool enabled) {
+    if (gConfig.enabled == enabled) {
+        return;
+    }
+    gConfig.enabled = enabled;
+
+    // Write the whole document back; the file is owned by this mod, and doing it
+    // all at once keeps the on-disk shape predictable for hand editing.
+    Json root = Json::makeObject();
+    root["enabled"] = Json::makeBool(gConfig.enabled);
+    root["defaultScreenValue"] = Json::makeBool(gConfig.defaultScreenValue);
+    Json screens = Json::makeObject();
+    for (const auto& entry : gConfig.overrides) {
+        screens[entry.first] = Json::makeBool(entry.second);
+    }
+    root["screens"] = screens;
+
+    std::string error;
+    if (!writeFileAtomically(gConfigPath, root.dump(4) + "\n", error)) {
+        logError("cannot save config: %s", error.c_str());
+        return;
+    }
+
+    // Sync the change-stamp so refreshConfigIfChanged() does not treat our own
+    // write as an external edit and reload it straight back.
+    struct stat st {};
+    if (stat(gConfigPath.c_str(), &st) == 0) {
+        gConfigStat = st;
+        gConfigReady = true;
+    }
 }
 
 void reloadConfig() {

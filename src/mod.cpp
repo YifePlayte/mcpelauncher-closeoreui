@@ -3,6 +3,7 @@
 #include "elf_image.h"
 #include "game_version.h"
 #include "log.h"
+#include "menu.h"
 #include "module_scan.h"
 #include "oreui_config.h"
 #include "oreui_hook.h"
@@ -11,7 +12,8 @@
 // mcpelauncher mod ABI: the launcher dlopen()s this shared object and calls
 // mod_preinit() before the game library is loaded, and mod_init() after.
 //
-//   mod_preinit -> the game is not loaded yet; only launcher hooks are usable.
+//   mod_preinit -> the game is not loaded yet; this is where the launcher menu is
+//                  registered and the config is read.
 //   mod_init    -> libminecraftpe.so is mapped; this is where we patch.
 
 extern "C" {
@@ -19,6 +21,10 @@ extern "C" {
 __attribute__((visibility("default"))) void mod_preinit() {
     coui::logInfo("CloseOreUI preinit (mod %s, target %s/%s)", CLOSEOREUI_MOD_VERSION,
                   coui::kPlatform, coui::kSupportedAbi);
+
+    // The config has to be loaded before the menu can show its current state.
+    coui::reloadConfig();
+    coui::installMenu();
 }
 
 __attribute__((visibility("default"))) void mod_init() {

@@ -117,18 +117,18 @@ jobs:
           ARCHIVE="$(ls dist/*.tar.gz | head -1)"
 
           {
-            echo "closeoreui ${VERSION}，mcpelauncher / Linux x86_64。"
+            echo "closeoreui ${VERSION} for mcpelauncher on Linux x86_64."
             echo
             if [[ -n "${TESTED_WITH:-}" ]]; then
-              echo "已验证的 Minecraft 版本：\`${TESTED_WITH}\`。"
+              echo "Verified against Minecraft \`${TESTED_WITH}\`."
               echo
-              echo "模组不绑定该版本：目标函数在启动时按结构定位，通常可跨 patch 版本工作。"
+              echo "The mod is not tied to that version: the target function is located structurally at load time, so it usually works across patch releases."
               echo
             fi
-            echo "安装：把 \`libcloseoreui.so\` 放进 mcpelauncher 的 \`mods/\` 目录。"
+            echo "Install: put \`libcloseoreui.so\` into mcpelauncher's \`mods/\` directory."
             echo
-            echo "本 release 只包含模组本身，不含任何 Minecraft 文件，构建过程也不需要它们。"
-            echo "许可：AGPL-3.0，发布包内附全文。"
+            echo "This release contains the mod only. No Minecraft files are included, and the build does not need them."
+            echo "Licence: AGPL-3.0, full text included in the archive."
           } > notes.md
 
           if gh release view "$TAG" >/dev/null 2>&1; then

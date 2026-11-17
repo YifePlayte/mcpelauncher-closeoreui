@@ -1,5 +1,7 @@
 #pragma once
 
+#include "config.h"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -36,5 +38,11 @@ void reloadConfig();
 
 // Resolves and returns the config file path in use (for logging).
 const std::string& configFilePath();
+
+// Live view of the loaded config, for the menu.
+const ModConfig& currentConfig();
+
+// Flips the master switch and writes the config back to disk.
+void setEnabled(bool enabled);
 
 }  // namespace coui

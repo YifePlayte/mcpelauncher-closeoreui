@@ -39,6 +39,7 @@ add_library(closeoreui SHARED
         src/discover.cpp
         src/oreui_config.cpp
         src/oreui_hook.cpp
+        src/menu.cpp
 )
 
 target_include_directories(closeoreui PRIVATE src)
