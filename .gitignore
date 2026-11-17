@@ -1,0 +1,15 @@
+build/
+out/
+*.o
+*.so
+*.tmp
+.cache/
+compile_commands.json
+
+# Ghidra projects produced by tools/ghidra/*.java
+ghidra_proj/
+*.gpr
+*.rep
+
+__pycache__/
+*.pyc
