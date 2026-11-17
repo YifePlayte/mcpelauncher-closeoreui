@@ -6,8 +6,8 @@ name: release
 # public sources compiled on a public runner, rather than a binary someone built
 # on their own machine. For a mod that hooks into game memory, that matters.
 #
-# It is NOT a compatibility check. The runner has no game files — and must not —
-# so "the workflow passed" only means "it compiles and the ABI surface is what we
+# It is NOT a compatibility check. The runner has no game files, and must not:
+# "the workflow passed" only means "it compiles and the ABI surface is what we
 # expect", never "it works on your version". Compatibility is reported at runtime
 # by the mod's own log.
 #
@@ -15,14 +15,15 @@ name: release
 # built and uploaded.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tested_with:
-        description: 'Minecraft version this build was verified against (optional, release notes only)'
+        description: 'Minecraft version tested against (optional, release notes only)'
         required: false
         type: string
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -33,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # git describe needs tags
+          fetch-depth: 0
 
       - name: Resolve version
         id: meta
@@ -42,7 +43,6 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            # Manual run: fall back to git describe, stripping the leading v.
             VERSION="$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo dev)"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -52,9 +52,6 @@ jobs:
         id: toolchain
         run: |
           set -euo pipefail
-          # Pin the NDK rather than following ANDROID_NDK_LATEST_HOME: the runner
-          # image moves to a new NDK whenever ubuntu-latest is bumped, which would
-          # silently change the compiler behind an otherwise identical release.
           NDK="${ANDROID_NDK_HOME:-}"
           if [[ -z "$NDK" || ! -d "$NDK" ]]; then
             echo "ANDROID_NDK_HOME is not set on this runner" >&2
@@ -79,60 +76,26 @@ jobs:
         run: |
           set -euo pipefail
           SO=build/x86_64/libcloseoreui.so
-          NM="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
           echo "== mod ABI entry points =="
-          "$NM" -D --defined-only "$SO" | tee symbols.txt
+          "$BIN/llvm-nm" -D --defined-only "$SO" | tee symbols.txt
           grep -q ' T mod_init$' symbols.txt
           grep -q ' T mod_preinit$' symbols.txt
 
-          echo "== dependencies (must be launcher/game provided only) =="
-          "$READELF" -d "$SO" | grep NEEDED
+          echo "== dependencies (launcher and game provided only) =="
+          "$BIN/llvm-readelf" -d "$SO" | grep NEEDED
 
           echo "== version label recorded in the binary =="
           strings "$SO" | grep -F "${{ steps.meta.outputs.version }}" \
             || { echo "version label missing from the binary" >&2; exit 1; }
 
       - name: Package
+        id: package
         run: |
           set -euo pipefail
-          NAME="closeoreui-${{ steps.meta.outputs.version }}-linux-x86_64"
-          mkdir -p dist
-          cp build/x86_64/libcloseoreui.so dist/
-          # AGPL section 6: distributing the binary requires conveying the
-          # licence with it, so LICENSE ships inside the archive.
-          cp LICENSE dist/
-          cat > dist/README.txt <<'EOF'
-CloseOreUI — 关闭 Minecraft 基岩版 OreUI 的 mcpelauncher 模组
-=============================================================
-
-安装
-----
-把 libcloseoreui.so 放到 mcpelauncher 的 mods 目录：
-
-  原生:    ~/.local/share/mcpelauncher/mods/
-  Flatpak: ~/.var/app/io.mrarm.mcpelauncher/data/mcpelauncher/mods/
-
-启动游戏后会自动在同级 CloseOreUI/config.json 生成配置。
-想确认是否生效，可设 CLOSEOREUI_DEBUG=1 查看日志中的
-"OreUI config function at ..." 与 "screens patched" 两行。
-
-本模组不绑定特定游戏版本：目标函数在启动时按结构定位。
-但行为层依赖一定的内存布局，若某版本失效，日志会给出明确原因。
-
-本包只包含模组本身，不含任何 Minecraft 文件。
-
-许可
-----
-GNU Affero General Public License v3.0，全文见同目录 LICENSE。
-对应源码可从发布该版本的仓库获取。
-EOF
-          ( cd dist && sha256sum libcloseoreui.so > SHA256SUMS.txt )
-          tar -czf "dist/${NAME}.tar.gz" -C dist \
-            libcloseoreui.so README.txt LICENSE SHA256SUMS.txt
-          echo "NAME=$NAME" >> "$GITHUB_ENV"
-          ls -la dist/
+          ./scripts/package.sh "${{ steps.meta.outputs.version }}" dist
+          echo "name=$(ls dist/*.tar.gz | head -1)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -143,34 +106,34 @@ EOF
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TESTED_WITH: ${{ inputs.tested_with }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          TAG="v${{ steps.meta.outputs.version }}"
+          TAG="v${VERSION}"
+          ARCHIVE="$(ls dist/*.tar.gz | head -1)"
 
-          if [[ -n "${TESTED_WITH:-}" ]]; then
-            COMPAT="已验证的 Minecraft 版本：\`${TESTED_WITH}\`。
+          {
+            echo "closeoreui ${VERSION}，mcpelauncher / Linux x86_64。"
+            echo
+            if [[ -n "${TESTED_WITH:-}" ]]; then
+              echo "已验证的 Minecraft 版本：\`${TESTED_WITH}\`。"
+              echo
+              echo "模组不绑定该版本：目标函数在启动时按结构定位，通常可跨 patch 版本工作。"
+              echo
+            fi
+            echo "安装：把 \`libcloseoreui.so\` 放进 mcpelauncher 的 \`mods/\` 目录。"
+            echo
+            echo "本 release 只包含模组本身，不含任何 Minecraft 文件，构建过程也不需要它们。"
+            echo "许可：AGPL-3.0，发布包内附全文。"
+          } > notes.md
 
-模组不绑定该版本——目标函数在启动时按结构定位，通常可跨 patch 版本工作。
-"
-          else
-            COMPAT=""
-          fi
-
-          cat > notes.md <<EOF
-closeoreui ${{ steps.meta.outputs.version }}，mcpelauncher / Linux x86_64。
-
-${COMPAT}
-安装：把 \`libcloseoreui.so\` 放进 mcpelauncher 的 \`mods/\` 目录。
-
-本 release 只包含模组本身，不含任何 Minecraft 文件，构建过程也不需要它们。
-EOF
-
-          # Create, or update the assets if the tag already has a release.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "dist/${{ env.NAME }}.tar.gz" --clobber
-            gh release edit "$TAG" --title "closeoreui ${{ steps.meta.outputs.version }}" --notes-file notes.md
+            gh release upload "$TAG" "$ARCHIVE" --clobber
+            gh release edit "$TAG" \
+              --title "closeoreui ${VERSION}" \
+              --notes-file notes.md
           else
-            gh release create "$TAG" "dist/${{ env.NAME }}.tar.gz" \
-              --title "closeoreui ${{ steps.meta.outputs.version }}" \
+            gh release create "$TAG" "$ARCHIVE" \
+              --title "closeoreui ${VERSION}" \
               --notes-file notes.md
           fi
