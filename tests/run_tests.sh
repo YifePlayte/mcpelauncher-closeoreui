@@ -21,6 +21,14 @@ SOURCES=(
     src/log.cpp
 )
 
+CONFIG_SOURCES=(
+    src/config.cpp
+    src/json.cpp
+    src/log.cpp
+    src/oreui_config.cpp
+    src/menu.cpp
+)
+
 echo "== building host tests with $CXX =="
 "$CXX" -std=c++20 -g -O1 -Wall -Isrc \
     tests/host_test.cpp "${SOURCES[@]}" \
@@ -34,9 +42,17 @@ echo
 echo "== host_test =="
 "$BUILD_DIR/host_test"
 
+"$CXX" -std=c++20 -g -O1 -Wall -Isrc \
+    tests/config_test.cpp "${CONFIG_SOURCES[@]}" \
+    -o "$BUILD_DIR/config_test"
+
 echo
 echo "== discovery_test =="
 "$BUILD_DIR/discovery_test"
+
+echo
+echo "== config_test =="
+"$BUILD_DIR/config_test"
 
 echo
 echo "all host tests passed"

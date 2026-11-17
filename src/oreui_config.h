@@ -49,6 +49,10 @@ void setEnabled(bool enabled);
 // false forces the legacy JSON-UI, which is what this mod is for.
 void setDefaultScreenValue(bool legacyUi);
 
+// Effective value for one screen: true means "this screen uses OreUI". Honours the
+// master switch, then a per-screen override, then defaultScreenValue.
+bool screenValue(const std::string& screen);
+
 // Pins one screen to the given value, overriding defaultScreenValue, and writes
 // back. Delete the entry from config.json to make the screen follow the default
 // again.

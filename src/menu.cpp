@@ -80,27 +80,19 @@ void legacyClicked(void* /*user*/) {
 
 bool screenSelected(void* user) {
     auto* state = static_cast<ScreenState*>(user);
-    const ModConfig& config = currentConfig();
-    auto found = config.overrides.find(state->route);
-    if (found != config.overrides.end()) {
-        return !found->second;  // tick = legacy UI
-    }
-    return !config.defaultScreenValue;
+    // screenValue() resolves master switch, override and default in one place;
+    // the tick shows the opposite because it means "legacy UI is active".
+    return !screenValue(state->route);
 }
 
 void screenClicked(void* user) {
     auto* state = static_cast<ScreenState*>(user);
-    const ModConfig& config = currentConfig();
 
-    // screenValue semantics: true means "this screen uses OreUI".
-    auto found = config.overrides.find(state->route);
-    const bool currentlyOreUi =
-            (found != config.overrides.end()) ? found->second : config.defaultScreenValue;
-
-    // Flip it. setScreenOverride() drops the entry instead of storing it when the
-    // result equals the global default, so flipping back to the default cleans up
-    // config.json rather than leaving a redundant line behind.
-    const bool nextOreUi = !currentlyOreUi;
+    // Flip the effective value. setScreenOverride() drops the entry instead of
+    // storing it when the result equals the global default, so toggling a screen
+    // back to the default cleans up config.json rather than leaving a redundant
+    // line behind.
+    const bool nextOreUi = !screenValue(state->route);
     setScreenOverride(state->route, nextOreUi);
     logInfo("menu: %s -> %s", state->route.c_str(), nextOreUi ? "OreUI" : "legacy UI");
 }

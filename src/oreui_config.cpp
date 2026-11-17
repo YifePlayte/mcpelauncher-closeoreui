@@ -97,6 +97,11 @@ bool looksLikeConfigMap(const void* candidate) {
     return mapLooksSane(candidate, nullptr);
 }
 
+bool screenValue(const std::string& screen) {
+    std::shared_lock<std::shared_mutex> lock(gConfigMutex);
+    return lookupScreenValueLocked(screen);
+}
+
 const std::string& configFilePath() {
     return gConfigPath;
 }

@@ -100,11 +100,10 @@ std::vector<std::string> configDirCandidates() {
         candidates.push_back(home + "/mcpelauncher/mods/" + kModDirName);
     }
 
-    // 3. Flatpak sandbox location.
-    if (const char* flatpak = getenv("FLATPAK_ID")) {
-        (void) flatpak;
-    }
-    if (!home.empty()) {
+    // 3. Flatpak sandbox location. Only offered when actually inside the sandbox:
+    //    adding it unconditionally would make a native install pick the flatpak
+    //    directory whenever both happen to exist.
+    if (getenv("FLATPAK_ID") != nullptr && !home.empty()) {
         candidates.push_back(home + "/.var/app/io.mrarm.mcpelauncher/data/mcpelauncher/mods/" +
                              kModDirName);
     }

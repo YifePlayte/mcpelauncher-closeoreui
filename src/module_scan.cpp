@@ -82,6 +82,7 @@ bool findFromProcMaps(ModuleInfo& out) {
     std::vector<Region> regions;
     uintptr_t lowest = UINTPTR_MAX;
     uintptr_t highest = 0;
+    std::string resolvedPath;
 
     while (std::getline(maps, line)) {
         unsigned long start = 0;
@@ -92,6 +93,18 @@ bool findFromProcMaps(ModuleInfo& out) {
         }
         if (line.find(kGameLibrary) == std::string::npos) {
             continue;
+        }
+
+        if (resolvedPath.empty()) {
+            // The path is the last field of the line; every line for this library
+            // repeats it, so the first match is enough. Keeping the real path makes
+            // the log identify which version was patched.
+            const size_t slash = line.rfind('/');
+            if (slash != std::string::npos) {
+                size_t begin = line.find_last_of(' ', slash);
+                begin = (begin == std::string::npos) ? 0 : begin + 1;
+                resolvedPath = line.substr(begin);
+            }
         }
 
         Region region;
@@ -117,7 +130,7 @@ bool findFromProcMaps(ModuleInfo& out) {
     out.base = lowest;
     out.size = highest - lowest;
     out.regions = std::move(regions);
-    out.path = kGameLibrary;
+    out.path = resolvedPath.empty() ? kGameLibrary : resolvedPath;
     return true;
 }
 
