@@ -53,6 +53,13 @@ uint16_t referencedRegisters(const InsnInfo& info) {
     const uint8_t op = info.opcode;
     const uint8_t op2 = info.opcode2;
     uint16_t mask = 0;
+    // 0F 1E /r (ENDBR64/ENDBR32 with the F3 prefix) and 0F 1F /r are NOP hints:
+    // their modrm is an encoding detail, not a register operand. Treating it as
+    // one would discard %rdi at a CET-enabled function entry, which is exactly
+    // where the map arrives.
+    if (info.opcode == 0x0F && (info.opcode2 == 0x1E || info.opcode2 == 0x1F)) {
+        return 0;
+    }
     if (info.hasModrm) {
         mask = bit(regOperand(info));
         if (info.modrmMod == 3) mask |= bit(rmOperand(info));

@@ -173,6 +173,39 @@ void testAcceptsRegistrationShape() {
     check(report.mapCallCount == 6, "six map-receiver calls counted");
 }
 
+// endbr64 is F3 0F 1E FA: modrm=0xFA means mod=3, reg=7, rm=2. Those fields are
+// an encoding detail, not register operands. Read as operands they would clear
+// %rdi (the map) at the entry of every CET-enabled build, and a real GCC 13
+// build does emit it, which is how this was found.
+void testAcceptsCetEntry() {
+    Image image;
+    Emitter e = image.emitter();
+    e.bytes({0xF3, 0x0F, 0x1E, 0xFA});  // endbr64
+    emitRegistrations(image, e, [](Emitter& emitter) {
+        emitter.movStackSlotToReg(7, -0x180);
+    });
+
+    coui::CandidateReport report;
+    const bool verified = image.verify(e.pos, report);
+    check(verified, "endbr64 prologue does not hide the map argument");
+    check(report.mapCallCount == 6, "endbr64 does not discard the original %rdi");
+}
+
+// The same instruction stream without the hint must behave identically, which
+// shows the endbr64 case is about the hint and not about the rest of the body.
+void testAcceptsWithoutCetEntry() {
+    Image image;
+    Emitter e = image.emitter();
+    e.bytes({0x90});  // nop
+    emitRegistrations(image, e, [](Emitter& emitter) {
+        emitter.movStackSlotToReg(7, -0x180);
+    });
+
+    coui::CandidateReport report;
+    check(image.verify(e.pos, report), "nop-prefixed stream is equivalent to endbr64");
+    check(report.mapCallCount == 6, "nop-prefixed stream keeps the map argument");
+}
+
 void testRejectsReassignedFramePointer() {
     Image image;
     Emitter e = image.emitter();
@@ -218,6 +251,8 @@ void testRejectsPoppedFramePointer() {
 int main() {
     printf("== registration shape ==\n");
     testAcceptsRegistrationShape();
+    testAcceptsCetEntry();
+    testAcceptsWithoutCetEntry();
     testRejectsReassignedFramePointer();
     testRejectsPoppedFramePointer();
 
