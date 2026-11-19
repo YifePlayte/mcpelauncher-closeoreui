@@ -56,7 +56,7 @@ done
 
 "$CXX" "${FLAGS[@]}" \
     tests/config_test.cpp "${CONFIG_SOURCES[@]}" \
-    -o "$BUILD_DIR/config_test" -rdynamic -ldl
+    -o "$BUILD_DIR/config_test" -rdynamic -ldl -DCLOSEOREUI_TESTING
 
 "$CXX" "${FLAGS[@]}" \
     tests/eh_frame_test.cpp "${SOURCES[@]}" \

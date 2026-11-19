@@ -30,7 +30,6 @@ public:
     bool parse(uintptr_t base, const std::string& path, std::string& error);
 
     uintptr_t base() const { return base_; }
-    const std::string& path() const { return path_; }
     const std::vector<Segment>& segments() const { return segments_; }
     const ElfHeader* header() const { return header_; }
 
@@ -40,15 +39,10 @@ public:
     // PT_GNU_EH_FRAME, i.e. .eh_frame_hdr. Returns false on stripped builds.
     bool ehFrameHeaderSegment(Segment& out) const;
 
-    // Reads a NUL-terminated string at an absolute address, bounded by the
-    // readable PT_LOAD segments.
-    bool readCString(uintptr_t addr, std::string& out, size_t maxLen = 512) const;
-
     bool containsAddress(uintptr_t addr, uint32_t requiredFlags) const;
 
 private:
     uintptr_t base_ = 0;
-    std::string path_;
     const ElfHeader* header_ = nullptr;
     std::vector<Segment> segments_;
 

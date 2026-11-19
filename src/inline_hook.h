@@ -15,8 +15,9 @@ namespace coui {
 //  * the overwritten range must stay inside the target function. Decoding the
 //    prologue without a known end silently corrupts whatever function follows a
 //    short one, which is exactly how a mod takes down a game;
-//  * the relocated bytes must stay position independent, or the trampoline
-//    computes wrong addresses.
+//  * the copied bytes must be position independent, because they are executed
+//    from a different address; anything that is not is refused instead of being
+//    rewritten, so a prologue that cannot be moved simply is not hooked.
 class InlineHook {
 public:
     InlineHook() = default;

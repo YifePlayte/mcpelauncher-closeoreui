@@ -413,17 +413,14 @@ InsnInfo decode(const uint8_t* code, size_t available) {
         } else if (op == 0xEB) {
             info.relSize = 1;
             info.relOffset = static_cast<uint8_t>(c.pos);
-            info.isUnconditionalJump = true;
             info.isBranch = true;
         } else if (op >= 0x70 && op <= 0x7F) {
             info.relSize = 1;
             info.relOffset = static_cast<uint8_t>(c.pos);
-            info.isConditionalJump = true;
             info.isBranch = true;
         } else if (opcode2 && op2 >= 0x80 && op2 <= 0x8F) {
             info.relSize = 4;
             info.relOffset = static_cast<uint8_t>(c.pos);
-            info.isConditionalJump = true;
             info.isBranch = true;
         }
         c.skip(static_cast<size_t>(imm));
@@ -433,26 +430,16 @@ InsnInfo decode(const uint8_t* code, size_t available) {
         info.isReturn = true;
     }
     if (!opcode2 && (op == 0xE9 || op == 0xEB || op == 0xFF)) {
-        if (op == 0xFF && hasModrm && (modrmReg == 4 || modrmReg == 5)) {
-            info.isUnconditionalJump = true;  // jmp r/m64
-        }
-        if (op == 0xE9 || op == 0xEB) {
-            info.isUnconditionalJump = true;
-        }
         info.isBranch = true;
     }
     if (!opcode2 && op == 0xFF && hasModrm && (modrmReg == 2 || modrmReg == 3)) {
         info.isCall = true;
         info.isBranch = true;
     }
-    if (!opcode2 && op == 0xFF && hasModrm && (modrmReg == 2 || modrmReg == 3)) {
-        info.isBranch = true;
-    }
 
     info.opcode = op;
     info.opcode2 = opcode2 ? op2 : 0;
     info.hasModrm = hasModrm;
-    info.modrm = modrm;
     info.modrmMod = static_cast<uint8_t>((modrm >> 6) & 3);
     info.modrmReg = static_cast<uint8_t>(modrmReg);
     info.modrmRm = static_cast<uint8_t>(modrm & 7);

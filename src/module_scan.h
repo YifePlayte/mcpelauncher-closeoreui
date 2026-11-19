@@ -10,9 +10,6 @@ namespace coui {
 struct Region {
     uintptr_t start = 0;
     size_t size = 0;
-    bool executable = false;
-    bool readable = false;
-    bool writable = false;
 };
 
 struct ModuleInfo {
@@ -28,9 +25,5 @@ struct ModuleInfo {
 // dl_iterate_phdr() reports the game. A /proc/self/maps fallback covers the case
 // where the launcher's dl_iterate_phdr is unavailable for some reason.
 bool findMinecraftModule(ModuleInfo& out, std::string& error);
-
-// All executable bytes of a module, in one contiguous logical view.
-// Returns empty when the module has no executable segment.
-bool collectExecutableRange(const ModuleInfo& module, uintptr_t& start, size_t& size);
 
 }  // namespace coui

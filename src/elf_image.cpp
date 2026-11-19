@@ -6,7 +6,7 @@ namespace coui {
 
 bool ElfImage::parse(uintptr_t base, const std::string& path, std::string& error) {
     base_ = base;
-    path_ = path;
+    (void) path;  // kept for callers/logging; the image never needs it
     segments_.clear();
     hasEhFrame_ = false;
 
@@ -86,28 +86,6 @@ bool ElfImage::containsAddress(uintptr_t addr, uint32_t requiredFlags) const {
                 return true;
             }
         }
-    }
-    return false;
-}
-
-bool ElfImage::readCString(uintptr_t addr, std::string& out, size_t maxLen) const {
-    out.clear();
-    if (!containsAddress(addr, PF_R)) {
-        return false;
-    }
-
-    const char* ptr = reinterpret_cast<const char*>(addr);
-    size_t limit = maxLen;
-    for (size_t i = 0; i < limit; ++i) {
-        // Never run past the containing segment.
-        if (!containsAddress(addr + i, PF_R)) {
-            return false;
-        }
-        char c = ptr[i];
-        if (c == '\0') {
-            return !out.empty();
-        }
-        out.push_back(c);
     }
     return false;
 }

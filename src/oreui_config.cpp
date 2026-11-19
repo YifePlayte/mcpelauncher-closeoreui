@@ -167,9 +167,11 @@ void setEntryValue(OreUIConfigEntry& entry, bool value) {
 
 }  // namespace
 
+#if defined(CLOSEOREUI_TESTING)
 bool looksLikeConfigMap(const void* candidate) {
     return mapLooksSane(candidate, nullptr);
 }
+#endif
 
 bool screenValue(const std::string& screen) {
     std::shared_lock<std::shared_mutex> lock(gConfigMutex);

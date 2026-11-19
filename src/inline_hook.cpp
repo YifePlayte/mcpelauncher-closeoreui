@@ -9,7 +9,6 @@
 #include <cstring>
 #include <cstdio>
 #include <string>
-#include <vector>
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -36,15 +35,6 @@ uintptr_t pageDown(uintptr_t addr) {
     return addr & ~(static_cast<uintptr_t>(pageSize()) - 1);
 }
 
-int64_t readRel(const uint8_t* p, uint8_t size) {
-    if (size == 1) {
-        return static_cast<int8_t>(*p);
-    }
-    int32_t v = 0;
-    memcpy(&v, p, 4);
-    return v;
-}
-
 void writeRelJump(uint8_t* at, uintptr_t from, uintptr_t destination) {
     at[0] = 0xE9;
     int32_t rel = static_cast<int32_t>(static_cast<int64_t>(destination) -
@@ -59,8 +49,8 @@ void writeAbsJump(uint8_t* at, uintptr_t destination) {
     memcpy(at + 6, &destination, sizeof(destination));
 }
 
-// Allocates executable memory within +-2 GiB of `near` so that a rel32 jump can
-// reach it and relocated RIP-relative operands stay in range.
+// Allocates executable memory within +-2 GiB of `near` so that the rel32 jump
+// back out of the trampoline can reach the target's continuation.
 void* allocateNear(uintptr_t near) {
     const size_t size = pageSize();
     const uintptr_t granularity = 0x10000;
@@ -151,13 +141,14 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
         return false;
     }
 
-    // Collect whole instructions until the patch fits.
+    // Collect whole instructions until the patch fits. `relocatable()` rejects
+    // RIP-relative operands and relative branches, so every accepted instruction
+    // copies into the trampoline verbatim — no per-instruction fixup is needed.
     //
     // The loop guard plus the post-decode bound keep `covered` under the size of
     // savedBytes_. A single x86 instruction can be 15 bytes, so checking only
     // before decoding is not enough: `covered` could otherwise jump past the
     // buffer and memcpy() below would overflow.
-    std::vector<InsnInfo> insns;
     size_t covered = 0;
     while (covered < patchSize) {
         if (covered >= window) {
@@ -185,7 +176,6 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
             error = "instruction at the end of the patch window would exceed it";
             return false;
         }
-        insns.push_back(info);
         covered += info.len;
     }
 
@@ -207,45 +197,6 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     auto* tramp = reinterpret_cast<uint8_t*>(trampoline_);
     memset(tramp, 0xCC, pageSize());
     memcpy(tramp, code, covered);
-
-    size_t offset = 0;
-    for (const InsnInfo& info : insns) {
-        if (info.ripRelative) {
-            uintptr_t oldNext = target + offset + info.len;
-            uintptr_t newNext = reinterpret_cast<uintptr_t>(tramp) + offset + info.len;
-            int32_t disp = 0;
-            memcpy(&disp, code + offset + info.ripDispOffset, sizeof(disp));
-            int64_t absoluteTarget = static_cast<int64_t>(oldNext) + disp;
-            int64_t newDisp = absoluteTarget - static_cast<int64_t>(newNext);
-            if (newDisp > INT32_MAX || newDisp < INT32_MIN) {
-                error = "RIP-relative operand out of range after relocation";
-                return false;
-            }
-            int32_t narrowed = static_cast<int32_t>(newDisp);
-            memcpy(tramp + offset + info.ripDispOffset, &narrowed, sizeof(narrowed));
-        } else if (info.relSize != 0) {
-            int64_t rel = readRel(code + offset + info.relOffset, info.relSize);
-            uintptr_t absoluteTarget = target + offset + info.len + static_cast<uintptr_t>(rel);
-            uintptr_t newNext = reinterpret_cast<uintptr_t>(tramp) + offset + info.len;
-            int64_t newRel = static_cast<int64_t>(absoluteTarget) - static_cast<int64_t>(newNext);
-            if (info.relSize == 1) {
-                if (newRel > 127 || newRel < -128) {
-                    error = "short branch out of range after relocation";
-                    return false;
-                }
-                int8_t narrowed = static_cast<int8_t>(newRel);
-                memcpy(tramp + offset + info.relOffset, &narrowed, 1);
-            } else {
-                if (newRel > INT32_MAX || newRel < INT32_MIN) {
-                    error = "branch out of range after relocation";
-                    return false;
-                }
-                int32_t narrowed = static_cast<int32_t>(newRel);
-                memcpy(tramp + offset + info.relOffset, &narrowed, 4);
-            }
-        }
-        offset += info.len;
-    }
 
     // Jump back to the instruction after the patched prologue.
     uintptr_t trampAddr = reinterpret_cast<uintptr_t>(tramp);

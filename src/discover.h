@@ -19,7 +19,6 @@ struct CandidateReport {
     size_t predicatePairCount = 0;
     size_t mapCallCount = 0;       // repeated direct calls with the original map as receiver
     bool registrationShape = false;
-    std::vector<std::string> samples;
 };
 
 struct DiscoveryResult {

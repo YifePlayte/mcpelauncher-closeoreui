@@ -12,7 +12,9 @@
 namespace coui {
 namespace {
 
+#if defined(__ANDROID__)
 constexpr const char* kTag = "CloseOreUI";
+#endif
 
 bool envFlag(const char* name) {
     const char* v = getenv(name);

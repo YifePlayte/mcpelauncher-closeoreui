@@ -50,9 +50,6 @@ int phdrCallback(struct dl_phdr_info* info, size_t /*size*/, void* data) {
         Region region;
         region.start = module.base + static_cast<uintptr_t>(ph.p_vaddr);
         region.size = static_cast<size_t>(ph.p_memsz);
-        region.executable = (ph.p_flags & PF_X) != 0;
-        region.readable = (ph.p_flags & PF_R) != 0;
-        region.writable = (ph.p_flags & PF_W) != 0;
         module.regions.push_back(region);
 
         if (region.start < lowest) {
@@ -87,8 +84,9 @@ bool findFromProcMaps(ModuleInfo& out) {
     while (std::getline(maps, line)) {
         unsigned long start = 0;
         unsigned long end = 0;
-        char perms[8] = {0};
-        if (std::sscanf(line.c_str(), "%lx-%lx %7s", &start, &end, perms) != 3) {
+        // Only the address range matters; permissions are not needed to bound the
+        // image, and the path is taken from the line itself.
+        if (std::sscanf(line.c_str(), "%lx-%lx", &start, &end) != 2) {
             continue;
         }
         if (line.find(kGameLibrary) == std::string::npos) {
@@ -110,9 +108,6 @@ bool findFromProcMaps(ModuleInfo& out) {
         Region region;
         region.start = static_cast<uintptr_t>(start);
         region.size = static_cast<size_t>(end - start);
-        region.readable = perms[0] == 'r';
-        region.writable = perms[1] == 'w';
-        region.executable = perms[2] == 'x';
         regions.push_back(region);
 
         if (region.start < lowest) {
@@ -151,23 +146,6 @@ bool findMinecraftModule(ModuleInfo& out, std::string& error) {
     }
 
     error = std::string("could not locate ") + kGameLibrary;
-    return false;
-}
-
-bool collectExecutableRange(const ModuleInfo& module, uintptr_t& start, size_t& size) {
-    start = 0;
-    size = 0;
-
-    // The first executable PT_LOAD is the .text segment. Returning just that one
-    // keeps the scanner from walking into .plt / .init stubs of unrelated pages
-    // and is what every pattern search in the launcher does too.
-    for (const Region& region : module.regions) {
-        if (region.executable) {
-            start = region.start;
-            size = region.size;
-            return size != 0;
-        }
-    }
     return false;
 }
 

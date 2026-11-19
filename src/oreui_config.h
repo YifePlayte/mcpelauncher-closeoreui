@@ -34,7 +34,10 @@ static_assert(sizeof(OreUIConfigEntry) == 2 * sizeof(void*) + 2 * kGamePredicate
 // Plausibility check on a pointer we are about to treat as the config map.
 // Checks the known container layout, readable node chain and route keys. This is
 // an ABI sanity check, not a substitute for identifying the registration function.
+// Compiled only for host tests; the module validates inline before mutating.
+#if defined(CLOSEOREUI_TESTING)
 bool looksLikeConfigMap(const void* candidate);
+#endif
 
 // Applies the current config file to a live map. Returns the number of entries
 // changed, or -1 when the map failed validation.

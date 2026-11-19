@@ -269,19 +269,12 @@ bool looksLikeOreUiRoute(const char* text, size_t length) {
     if (text[0] != '/') {
         return false;
     }
-    // Must be a path with at least one separator after the leading slash, and no
-    // whitespace or format specifiers (those are log messages, not routes).
-    bool hasSecondSeparator = false;
+    // No whitespace or format specifiers: those are log messages, not routes.
     for (size_t i = 1; i < length; ++i) {
-        char c = text[i];
-        if (!isRouteChar(c)) {
+        if (!isRouteChar(text[i])) {
             return false;
         }
-        if (c == '/') {
-            hasSecondSeparator = true;
-        }
     }
-    (void) hasSecondSeparator;
     // Reject obvious non-routes: file names, printf templates, version strings.
     if (memchr(text, '%', length) != nullptr) {
         return false;
@@ -536,9 +529,6 @@ bool discoverOreUiConfigFunction(const ElfImage& image, const FunctionTable& fun
                                                                routeAt, routes, report);
         }
 
-        for (size_t i = 0; i < stats.routeIndices.size() && i < 4; ++i) {
-            report.samples.push_back(routes[stats.routeIndices[i]].second);
-        }
         candidates.push_back(std::move(report));
     }
 
@@ -552,8 +542,8 @@ bool discoverOreUiConfigFunction(const ElfImage& image, const FunctionTable& fun
     // to touch many nested routes. Only independently validated registrations are
     // eligible; route count alone must never authorize an inline hook.
     std::sort(candidates.begin(), candidates.end(),
-               [](const CandidateReport& a, const CandidateReport& b) {
-                   if (a.registrationShape != b.registrationShape) return a.registrationShape;
+              [](const CandidateReport& a, const CandidateReport& b) {
+                  if (a.registrationShape != b.registrationShape) return a.registrationShape;
                   if (a.topLevelRouteCount != b.topLevelRouteCount) {
                       return a.topLevelRouteCount > b.topLevelRouteCount;
                   }

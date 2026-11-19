@@ -85,7 +85,7 @@ ELF 与 `.eh_frame` 解析，因此不需要 nlohmann/json、funchook、capstone
 | 运行时解析 `.eh_frame_hdr` | 本项目 | 用于把引用归属到函数，并保证命中的是函数入口 |
 | x86-64 指令长度解码器 | 本项目 | 用于 `lea` 识别与 hook 序言重定位 |
 | 顶层路由判据 | 本项目 | 实测发现按「引用路由总数」排序会选错函数 |
-| 内联 hook（rel32 + trampoline） | 本项目 | 含 RIP 相对重定位与函数边界校验 |
+| 内联 hook（rel32 + trampoline） | 本项目 | 含函数边界校验；序言遇到位置相关指令时拒绝安装 |
 
 两点需要说明清楚：
 
