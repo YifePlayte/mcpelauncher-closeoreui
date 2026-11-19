@@ -12,6 +12,16 @@ CXX="${CXX:-g++}"
 BUILD_DIR="${BUILD_DIR:-build/host}"
 mkdir -p "$BUILD_DIR"
 
+FLAGS=(-std=c++20 -g -O1 -Wall -Isrc -pthread)
+if [[ -n "${SANITIZERS:-}" ]]; then
+    FLAGS+=(-fsanitize="$SANITIZERS" -fno-omit-frame-pointer)
+    if "$CXX" --version | grep -qi clang; then
+        # Handwritten trampolines and the launcher C ABI have no Clang function
+        # type metadata. All other requested sanitizer checks remain enabled.
+        FLAGS+=(-fno-sanitize=function)
+    fi
+fi
+
 SOURCES=(
     src/x64_decoder.cpp
     src/eh_frame.cpp
@@ -30,29 +40,43 @@ CONFIG_SOURCES=(
 )
 
 echo "== building host tests with $CXX =="
-"$CXX" -std=c++20 -g -O1 -Wall -Isrc \
+"$CXX" "${FLAGS[@]}" \
     tests/host_test.cpp "${SOURCES[@]}" \
     -o "$BUILD_DIR/host_test" -ldl
 
-"$CXX" -std=c++20 -g -O1 -Wall -Isrc \
+"$CXX" "${FLAGS[@]}" \
     tests/discovery_test.cpp "${SOURCES[@]}" \
     -o "$BUILD_DIR/discovery_test" -ldl
 
-echo
-echo "== host_test =="
-"$BUILD_DIR/host_test"
+for fixture in pointer_table ambiguous; do
+    "$CXX" "${FLAGS[@]}" -D"DISCOVERY_${fixture^^}" \
+        tests/discovery_test.cpp "${SOURCES[@]}" \
+        -o "$BUILD_DIR/discovery_${fixture}_test" -ldl
+done
 
-"$CXX" -std=c++20 -g -O1 -Wall -Isrc \
+"$CXX" "${FLAGS[@]}" \
     tests/config_test.cpp "${CONFIG_SOURCES[@]}" \
-    -o "$BUILD_DIR/config_test"
+    -o "$BUILD_DIR/config_test" -rdynamic -ldl
 
-echo
-echo "== discovery_test =="
-"$BUILD_DIR/discovery_test"
+"$CXX" "${FLAGS[@]}" \
+    tests/eh_frame_test.cpp "${SOURCES[@]}" \
+    -o "$BUILD_DIR/eh_frame_test" -ldl
 
-echo
-echo "== config_test =="
-"$BUILD_DIR/config_test"
+"$CXX" "${FLAGS[@]}" -DCLOSEOREUI_TESTING \
+    tests/shape_test.cpp "${SOURCES[@]}" \
+    -o "$BUILD_DIR/shape_test" -ldl
+
+"$CXX" "${FLAGS[@]}" tests/io_test.cpp src/json.cpp \
+    -o "$BUILD_DIR/io_test" -Wl,--wrap=rename -Wl,--wrap=fwrite -Wl,--wrap=fsync
+
+"$CXX" "${FLAGS[@]}" tools/scan_so.cpp "${SOURCES[@]}" \
+    -o "$BUILD_DIR/scan_so" -ldl
+
+for test in host discovery discovery_pointer_table discovery_ambiguous config eh_frame shape io; do
+    echo
+    echo "== ${test}_test =="
+    "$BUILD_DIR/${test}_test"
+done
 
 echo
 echo "all host tests passed"

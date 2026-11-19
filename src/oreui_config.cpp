@@ -6,6 +6,7 @@
 #include "menu.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -46,40 +47,113 @@ static bool lookupScreenValueLocked(const std::string& screen) {
 
 namespace {
 
-// libc++'s unordered_map layout (ABI version 1) as seen through its first three
-// words: the bucket pointer array, the element count, and the capacity word.
-// Reading this is the only cheap way to sanity check a map we received through a
-// raw ABI boundary, and because the mod is compiled with the same libc++ ABI as
-// the game it is also the map we are about to mutate.
+// libc++ unordered_map ABI v1: bucket array, bucket count, first node, element
+// count. The host libstdc++ test map has the same four-word container prefix.
 struct MapPeek {
     const void* const* buckets;
+    size_t bucketCount;
+    const void* firstNode;
     size_t size;
 };
 
-MapPeek peekMap(const void* map) {
-    MapPeek peek{};
-    memcpy(&peek, map, sizeof(peek));
-    return peek;
-}
+// The registration owns its map for the duration of this call. Check readable
+// mappings before probing a raw ABI object, rather than dereferencing arbitrary
+// pointers when a future build has an incompatible layout.
+class ReadableMemory {
+public:
+    ReadableMemory() {
+        FILE* maps = fopen("/proc/self/maps", "r");
+        if (maps == nullptr) return;
+        char line[512];
+        while (fgets(line, sizeof(line), maps) != nullptr) {
+            unsigned long begin = 0;
+            unsigned long end = 0;
+            char permissions[5]{};
+            if (sscanf(line, "%lx-%lx %4s", &begin, &end, permissions) == 3 &&
+                permissions[0] == 'r' && begin < end) {
+                ranges_.emplace_back(begin, end);
+            }
+        }
+        fclose(maps);
+    }
 
-bool mapLooksSane(const void* map, size_t* reportedSize) {
-    if (map == nullptr) {
+    bool contains(const void* pointer, size_t size) const {
+        uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+        if (address == 0 || size > UINTPTR_MAX - address) return false;
+        const uintptr_t end = address + size;
+        for (const auto& range : ranges_) {
+            if (range.second <= address) continue;
+            if (range.first > address) return false;
+            if (range.second >= end) return true;
+            address = range.second;
+        }
         return false;
     }
-    MapPeek peek = peekMap(map);
 
-    // An empty map has a null bucket array but a zero size. A populated map has
-    // both. Anything else means we are looking at the wrong object.
+private:
+    std::vector<std::pair<uintptr_t, uintptr_t>> ranges_;
+};
+
+// libc++ puts the cached hash before the value; libstdc++'s host node puts its
+// value immediately after the next pointer. This distinction is only for tests.
+#if defined(_LIBCPP_VERSION)
+constexpr size_t kNodePrefix = 2 * sizeof(void*);
+#elif defined(__GLIBCXX__)
+constexpr size_t kNodePrefix = sizeof(void*);
+#else
+#error Unsupported unordered_map ABI
+#endif
+using MapValue = OreUIConfigMap::value_type;
+constexpr size_t kValueOffset =
+        (kNodePrefix + alignof(MapValue) - 1) / alignof(MapValue) * alignof(MapValue);
+
+bool mapLooksSane(const void* map, size_t* reportedSize) {
+    if (map == nullptr || reinterpret_cast<uintptr_t>(map) % alignof(OreUIConfigMap) != 0) {
+        return false;
+    }
+    ReadableMemory memory;
+    if (!memory.contains(map, sizeof(MapPeek))) return false;
+    MapPeek peek{};
+    memcpy(&peek, map, sizeof(peek));
+    if (reportedSize != nullptr) *reportedSize = peek.size;
+
+    // Capacity is not the element count. Empty reserved maps can still own a
+    // bucket array, but only populated maps have a first node.
     if (peek.size > 100000) {
         return false;
     }
-    if (peek.size > 0 && peek.buckets == nullptr) {
+    if ((peek.bucketCount == 0) != (peek.buckets == nullptr) ||
+        (peek.size == 0) != (peek.firstNode == nullptr) ||
+        (peek.size > 0 && peek.bucketCount == 0) ||
+        peek.bucketCount > SIZE_MAX / sizeof(void*)) {
         return false;
     }
-    if (reportedSize != nullptr) {
-        *reportedSize = peek.size;
+    if (peek.bucketCount > 0 &&
+        !memory.contains(peek.buckets, peek.bucketCount * sizeof(void*))) {
+        return false;
     }
-    return true;
+
+    const void* node = peek.firstNode;
+    size_t visited = 0;
+    while (node != nullptr) {
+        if (visited >= peek.size || reinterpret_cast<uintptr_t>(node) % alignof(MapValue) != 0 ||
+            !memory.contains(node, kValueOffset + sizeof(MapValue))) {
+            return false;
+        }
+        const auto* value = reinterpret_cast<const MapValue*>(
+                static_cast<const uint8_t*>(node) + kValueOffset);
+        const std::string& key = value->first;
+        const size_t length = key.size();
+        if (length < 4 || length > 120 || !memory.contains(key.data(), length + 1) ||
+            key.data()[0] != '/' || key.data()[length] != '\0') {
+            return false;
+        }
+        const void* next = nullptr;
+        memcpy(&next, node, sizeof(next));
+        node = next;
+        ++visited;
+    }
+    return visited == peek.size;
 }
 
 // The game evaluates each predicate exactly once, during startup, and caches the
@@ -227,13 +301,6 @@ void reloadConfig() {
 }
 
 int applyConfigToMap(OreUIConfigMap& configs) {
-    {
-        std::shared_lock<std::shared_mutex> lock(gConfigMutex);
-        if (!gConfig.enabled) {
-            return 0;
-        }
-    }
-
     size_t size = 0;
     if (!mapLooksSane(&configs, &size)) {
         logError("config map failed validation (%zu entries); refusing to patch",
@@ -249,9 +316,12 @@ int applyConfigToMap(OreUIConfigMap& configs) {
         std::unique_lock<std::shared_mutex> lock(gConfigMutex);
 
         for (auto& item : configs) {
+            routes.push_back(item.first);
+            // The master switch only disables mutation, not the menu that lets
+            // the user enable the mod again after restarting the game.
+            if (!gConfig.enabled) continue;
             const bool value = lookupScreenValueLocked(item.first);
             setEntryValue(item.second, value);
-            routes.push_back(item.first);
             ++changed;
             logDebug("screen %s -> %s", item.first.c_str(), value ? "oreui" : "legacy");
         }

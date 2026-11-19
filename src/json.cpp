@@ -1,10 +1,15 @@
 #include "json.h"
 
+#include <atomic>
+#include <cerrno>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace coui {
 namespace {
@@ -557,44 +562,48 @@ bool readFile(const std::string& path, std::string& out, std::string& error) {
 
 bool writeFileAtomically(const std::string& path, const std::string& content,
                          std::string& error) {
-    const std::string temp = path + ".tmp";
-    FILE* file = fopen(temp.c_str(), "wb");
+    // A private same-directory file prevents concurrent launcher instances from
+    // truncating or renaming each other's temporary output.
+    // mcpelauncher's synthetic libc does not export mkstemp. Use its supported
+    // open(O_EXCL) API, with per-process monotonic names and collision retries.
+    static std::atomic<uint64_t> nextTemporary{0};
+    const std::string prefix = path + ".tmp." +
+            std::to_string(static_cast<uint64_t>(getpid())) + ".";
+    std::string temp;
+    int fd = -1;
+    for (unsigned attempt = 0; attempt < 64; ++attempt) {
+        temp = prefix + std::to_string(nextTemporary.fetch_add(1, std::memory_order_relaxed));
+        fd = open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (fd >= 0 || errno != EEXIST) break;
+    }
+    if (fd < 0) {
+        error = "cannot create temporary file for " + path + ": " + strerror(errno);
+        return false;
+    }
+    FILE* file = fdopen(fd, "wb");
     if (file == nullptr) {
-        error = "cannot write " + temp;
+        int savedError = errno;
+        close(fd);
+        unlink(temp.c_str());
+        error = "cannot write " + path + ": " + strerror(savedError);
         return false;
     }
     size_t written = content.empty() ? 0 : fwrite(content.data(), 1, content.size(), file);
-    bool ok = written == content.size() && fflush(file) == 0;
+    bool ok = written == content.size();
+    if (fflush(file) != 0) ok = false;
+    if (ok && fsync(fd) != 0) ok = false;
     ok = (fclose(file) == 0) && ok;
     if (!ok) {
-        remove(temp.c_str());
+        unlink(temp.c_str());
         error = "short write on " + temp;
         return false;
     }
     if (rename(temp.c_str(), path.c_str()) != 0) {
-        // Some filesystems refuse rename over a file that is currently mapped;
-        // fall back to a copy.
-        FILE* src = fopen(temp.c_str(), "rb");
-        FILE* dst = fopen(path.c_str(), "wb");
-        if (src && dst) {
-            char buffer[8192];
-            size_t read = 0;
-            while ((read = fread(buffer, 1, sizeof(buffer), src)) > 0) {
-                fwrite(buffer, 1, read, dst);
-            }
-            ok = fflush(dst) == 0;
-            fclose(dst);
-            if (src) fclose(src);
-            remove(temp.c_str());
-            if (ok) {
-                return true;
-            }
-        } else {
-            if (src) fclose(src);
-            if (dst) fclose(dst);
-        }
-        remove(temp.c_str());
-        error = "cannot replace " + path;
+        // Never fall back to an in-place copy: every failure must preserve the
+        // existing configuration, including when the temporary file disappeared.
+        int savedError = errno;
+        unlink(temp.c_str());
+        error = "cannot replace " + path + ": " + strerror(savedError);
         return false;
     }
     return true;

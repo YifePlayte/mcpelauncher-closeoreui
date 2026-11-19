@@ -3,6 +3,7 @@
 #include "log.h"
 #include "x64_decoder.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <cstring>
@@ -27,8 +28,8 @@ constexpr size_t kAbsJumpSize = 14;
 constexpr size_t kMaxPrologue = 32;
 
 size_t pageSize() {
-    static const size_t value = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    return value == 0 ? 4096 : value;
+    static const long value = sysconf(_SC_PAGESIZE);
+    return value > 0 ? static_cast<size_t>(value) : 4096;
 }
 
 uintptr_t pageDown(uintptr_t addr) {
@@ -66,10 +67,11 @@ void* allocateNear(uintptr_t near) {
 
     for (uintptr_t delta = granularity; delta < 0x70000000ULL; delta += granularity) {
         for (int direction = 0; direction < 2; ++direction) {
-            uintptr_t hint = direction == 0 ? near + delta : near - delta;
-            if (direction == 1 && hint < delta) {
+            if ((direction == 0 && near > UINTPTR_MAX - delta) ||
+                (direction == 1 && near < delta)) {
                 continue;
             }
+            uintptr_t hint = direction == 0 ? near + delta : near - delta;
             hint = pageDown(hint);
             void* p = mmap(reinterpret_cast<void*>(hint), size,
                            PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -119,6 +121,15 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
         error = "invalid hook arguments";
         return false;
     }
+    if (targetEnd <= target) {
+        error = "hook requires a known function end after the target";
+        return false;
+    }
+    const size_t window = std::min<size_t>(kMaxPrologue, targetEnd - target);
+    if (window < kRelJumpSize) {
+        error = "function is too short to hook without clobbering its successor";
+        return false;
+    }
 
     const auto* code = reinterpret_cast<const uint8_t*>(target);
 
@@ -135,6 +146,10 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
             absolute = true;
         }
     }
+    if (window < patchSize) {
+        error = "function is too short for an absolute jump";
+        return false;
+    }
 
     // Collect whole instructions until the patch fits.
     //
@@ -145,17 +160,17 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     std::vector<InsnInfo> insns;
     size_t covered = 0;
     while (covered < patchSize) {
-        if (covered >= kMaxPrologue) {
+        if (covered >= window) {
             error = "prologue too long to relocate";
             return false;
         }
-        InsnInfo info = decode(code + covered);
+        InsnInfo info = decode(code + covered, window - covered);
         if (!info.valid) {
             // Report the bytes: an unknown opcode at this point means the decoder
             // does not cover something in this build's prologue, which is worth
             // seeing in a bug report rather than only "cannot hook".
             char hex[3 * 8 + 1] = {0};
-            for (int b = 0; b < 8 && covered + b < kMaxPrologue; ++b) {
+            for (size_t b = 0; b < 8 && b < window - covered; ++b) {
                 snprintf(hex + b * 3, 4, "%02x ", code[covered + b]);
             }
             error = std::string("undecodable instruction in prologue at +") +
@@ -166,7 +181,7 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
             error = "prologue contains a position dependent instruction";
             return false;
         }
-        if (covered + info.len > kMaxPrologue) {
+        if (info.len > window - covered) {
             error = "instruction at the end of the patch window would exceed it";
             return false;
         }
@@ -175,7 +190,7 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
     }
 
     // The patch must not run past the end of the function.
-    if (targetEnd != 0 && target + covered > targetEnd) {
+    if (covered > targetEnd - target) {
         error = "function is too short to hook without clobbering its successor";
         return false;
     }
@@ -256,7 +271,7 @@ bool InlineHook::install(uintptr_t target, uintptr_t targetEnd, void* detour, vo
 
     // Pad any bytes between the jump's end and the relocated instructions with
     // NOPs so the leftover bytes never decode as something else.
-    uint8_t patch[kAbsJumpSize];
+    uint8_t patch[kMaxPrologue];
     memset(patch, 0x90, sizeof(patch));
     if (absolute) {
         writeAbsJump(patch, reinterpret_cast<uintptr_t>(detour));

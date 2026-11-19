@@ -16,6 +16,9 @@ struct CandidateReport {
     size_t referenceCount = 0;     // total LEA references to those strings
     size_t functionSize = 0;
     int prologueScore = 0;
+    size_t predicatePairCount = 0;
+    size_t mapCallCount = 0;       // repeated direct calls with the original map as receiver
+    bool registrationShape = false;
     std::vector<std::string> samples;
 };
 
@@ -33,8 +36,9 @@ struct DiscoveryResult {
 //
 // The function has no exported symbol, so it is located structurally: it is the
 // function that takes the address of the largest number of OreUI route string
-// constants ("/oreui-marketplace/search", "/main-menu", ...) because those
-// strings are exactly the keys it inserts into the config map.
+// constants, constructs paired predicates in the game ABI, and repeatedly passes
+// the original first argument to registration calls. Insufficient or ambiguous
+// evidence is refused instead of falling back to an unrelated route helper.
 bool discoverOreUiConfigFunction(const ElfImage& image, const FunctionTable& functions,
                                  DiscoveryResult& out, std::string& error);
 
@@ -45,5 +49,15 @@ bool looksLikeOreUiRoute(const char* text, size_t length);
 // Nested routes ("/gameplay/death") are in-world UI, not config-map keys.
 bool isTopLevelRoute(const std::string& route);
 int scorePrologue(const uint8_t* code, size_t maxLen, size_t* prologueLen = nullptr);
+
+// Exposed for the self-test harness: runs the registration-structure check over
+// the instruction stream at `start`. `routes` maps absolute string addresses to
+// their text, exactly as the scanner collects them. Compiled only for host tests
+// (tests/run_tests.sh), never into the released module.
+#if defined(CLOSEOREUI_TESTING)
+bool verifyRegistrationShape(const ElfImage& image, uintptr_t start, size_t length,
+                             const std::vector<std::pair<uintptr_t, std::string>>& routes,
+                             CandidateReport& report);
+#endif
 
 }  // namespace coui

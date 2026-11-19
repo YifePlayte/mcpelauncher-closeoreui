@@ -1,5 +1,6 @@
 #include "x64_decoder.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -27,37 +28,61 @@ inline bool isLegacyPrefix(uint8_t b) {
 
 struct Cursor {
     const uint8_t* base;
+    size_t limit;
     size_t pos = 0;
+    bool failed = false;
 
-    bool need(size_t n) const { return n <= 15; }
-    uint8_t byte() { return base[pos++]; }
-    uint8_t peek() const { return base[pos]; }
+    bool need(size_t n) const { return n <= limit - pos; }
+    uint8_t byte() {
+        if (!need(1)) {
+            failed = true;
+            return 0;
+        }
+        return base[pos++];
+    }
+    uint8_t peek() {
+        if (!need(1)) {
+            failed = true;
+            return 0;
+        }
+        return base[pos];
+    }
+    void skip(size_t n) {
+        if (!need(n)) {
+            failed = true;
+            return;
+        }
+        pos += n;
+    }
 };
 
 // Immediate size in bytes for a one-byte opcode, after modrm.
-int immediateSize1Byte(uint8_t op, bool rexW, bool opsize16, bool hasModrm) {
+int immediateSize1Byte(uint8_t op, bool rexW, bool opsize16, bool address32, bool hasModrm) {
+    const int operandImm = opsize16 && !rexW ? 2 : 4;
     if (op >= 0x70 && op <= 0x7F) return 1;         // jcc rel8
     if (op >= 0xB0 && op <= 0xB7) return 1;         // mov r8, imm8
     if (op >= 0xB8 && op <= 0xBF) return rexW ? 8 : (opsize16 ? 2 : 4);
     if (op == 0xE8 || op == 0xE9) return 4;         // call/jmp rel32
     if (op == 0xEB) return 1;                       // jmp rel8
     if (op == 0xA8) return 1;                       // test al, imm8
-    if (op == 0xA9) return opsize16 ? 2 : 4;        // test eax, imm
+    if (op == 0xA9) return operandImm;              // test eax/rax, imm
     if (op == 0x68) return opsize16 ? 2 : 4;        // push imm
     if (op == 0x6A) return 1;                       // push imm8
+    if (op == 0x69) return operandImm;              // imul r, r/m, imm16/32
+    if (op == 0x6B) return 1;                       // imul r, r/m, imm8
     if (op == 0xC2 || op == 0xCA) return 2;         // ret imm16
     if (op == 0xCD) return 1;                       // int imm8
     if (op == 0xC8) return 3;                       // enter
     if (op == 0xA0 || op == 0xA1 || op == 0xA2 || op == 0xA3) {
         // moffs — addrsize dependent
-        return 8;
+        return address32 ? 4 : 8;
     }
 
     // AL/eAX, imm form: low 3 bits 4 (imm8) or 5 (imm32)
     if (op < 0x40) {
         switch (op & 7) {
             case 4: return 1;
-            case 5: return opsize16 ? 2 : 4;
+            case 5: return operandImm;
             default: break;
         }
     }
@@ -70,13 +95,13 @@ int immediateSize1Byte(uint8_t op, bool rexW, bool opsize16, bool hasModrm) {
         case 0x80: case 0x82: case 0x83:
             return 1;
         case 0x81:
-            return opsize16 ? 2 : 4;
+            return operandImm;
         case 0xC0: case 0xC1:
             return 1;
         case 0xC6:
             return 1;
         case 0xC7:
-            return opsize16 ? 2 : 4;
+            return operandImm;
         case 0xF6:
         case 0xF7:
             // Group 3: only /0 (test) and /1 (test) carry an immediate.
@@ -153,6 +178,9 @@ bool isKnownTwoByteOpcode(uint8_t op2, bool hasModrm) {
     if (op2 >= 0x40 && op2 <= 0x4F) return true;   // cmovcc
     if (op2 >= 0x90 && op2 <= 0x9F) return true;   // setcc
     if (op2 >= 0xC8 && op2 <= 0xCF) return true;   // bswap
+    // Legacy packed-SSE/MMX arithmetic: these encodings all carry ModRM and no
+    // immediate. In particular, compiler-generated PXOR must not stop the walk.
+    if (op2 >= 0xD0 && op2 <= 0xFE) return true;
     switch (op2) {
         case 0x05: case 0x06: case 0x07: case 0x08: case 0x09:
         case 0x0B: case 0x0E:
@@ -176,6 +204,7 @@ bool isKnownTwoByteOpcode(uint8_t op2, bool hasModrm) {
         case 0x6C: case 0x6D: case 0x6E: case 0x6F:
         case 0x70: case 0x71: case 0x72: case 0x73:
         case 0x74: case 0x75: case 0x76: case 0x77:
+        case 0x7C: case 0x7D: case 0x7E: case 0x7F:
         case 0xA2: case 0xA3: case 0xA4: case 0xA5:
         case 0xA8: case 0xA9: case 0xAA: case 0xAB:
         case 0xAC: case 0xAD: case 0xAE: case 0xAF:
@@ -195,34 +224,33 @@ bool isKnownTwoByteOpcode(uint8_t op2, bool hasModrm) {
 
 }  // namespace
 
-InsnInfo decode(const uint8_t* code) {
+InsnInfo decode(const uint8_t* code, size_t available) {
     InsnInfo info;
-    if (code == nullptr) {
+    if (code == nullptr || available == 0) {
         return info;
     }
 
-    Cursor c{code};
+    Cursor c{code, std::min<size_t>(available, 15)};
     bool opsize16 = false;
-    bool rexW = false;
-    bool hadF3 = false;
+    bool address32 = false;
+    uint8_t rex = 0;
 
-    // Legacy prefixes (at most 15 total instructions bytes; 4 prefixes is plenty
-    // in practice, but loop bounded by 15 to stay safe).
-    for (int i = 0; i < 14; ++i) {
+    // The last REX immediately before the opcode is effective. A legacy prefix
+    // after REX cancels it; repeated prefixes must still fit in the input range.
+    while (c.need(1)) {
         uint8_t b = c.peek();
-        if (!isLegacyPrefix(b)) {
+        if (isLegacyPrefix(b)) {
+            if (b == 0x66) opsize16 = true;
+            if (b == 0x67) address32 = true;
+            rex = 0;
+        } else if ((b & 0xF0) == 0x40) {
+            rex = b;
+        } else {
             break;
         }
-        if (b == 0x66) opsize16 = true;
-        if (b == 0xF3) hadF3 = true;
         c.byte();
     }
-
-    // REX
-    if ((c.peek() & 0xF0) == 0x40) {
-        rexW = (c.peek() & 0x08) != 0;
-        c.byte();
-    }
+    const bool rexW = (rex & 0x08) != 0;
 
     uint8_t op = c.byte();
     bool hasModrm = false;
@@ -279,7 +307,7 @@ InsnInfo decode(const uint8_t* code) {
                 case 0x0B: case 0x0E:
                 case 0x30: case 0x31: case 0x32: case 0x33: case 0x34:
                 case 0x35: case 0x37:
-                case 0x77: case 0xA2:
+                case 0x77: case 0xA2: case 0xA8: case 0xA9: case 0xAA:
                 case 0x80: case 0x81: case 0x82: case 0x83:
                 case 0x84: case 0x85: case 0x86: case 0x87:
                 case 0x88: case 0x89: case 0x8A: case 0x8B:
@@ -306,19 +334,27 @@ InsnInfo decode(const uint8_t* code) {
 
         if (mod != 3) {
             if (rm == 4) {
-                uint8_t sib = c.byte();
-                if (mod == 0 && ((sib >> 0) & 7) == 5) {
-                    c.pos += 4;
+                info.sib = c.byte();
+                if (mod == 0 && (info.sib & 7) == 5) {
+                    info.dispOffset = static_cast<uint8_t>(c.pos);
+                    info.dispSize = 4;
+                    c.skip(4);
                 }
             } else if (mod == 0 && rm == 5) {
                 info.ripRelative = true;
                 info.ripDispOffset = static_cast<uint8_t>(c.pos);
-                c.pos += 4;
+                info.dispOffset = static_cast<uint8_t>(c.pos);
+                info.dispSize = 4;
+                c.skip(4);
             }
             if (mod == 1) {
-                c.pos += 1;
+                info.dispOffset = static_cast<uint8_t>(c.pos);
+                info.dispSize = 1;
+                c.skip(1);
             } else if (mod == 2) {
-                c.pos += 4;
+                info.dispOffset = static_cast<uint8_t>(c.pos);
+                info.dispSize = 4;
+                c.skip(4);
             }
         }
     }
@@ -331,6 +367,11 @@ InsnInfo decode(const uint8_t* code) {
     bool unknownOpcode = false;
     if (!opcode2) {
         unknownOpcode = !isKnownOneByteOpcode(op, hasModrm);
+        // C7 /7 is XBEGIN, not the position-independent MOV form. Its relative
+        // immediate must never be copied unchanged into a trampoline.
+        if ((op == 0xC6 || op == 0xC7 || op == 0x8F) && modrmReg != 0) {
+            unknownOpcode = true;
+        }
     } else if (!opcode3) {
         unknownOpcode = !isKnownTwoByteOpcode(op2, hasModrm);
     }
@@ -338,9 +379,9 @@ InsnInfo decode(const uint8_t* code) {
     // --- immediate -----------------------------------------------------------
     int imm = 0;
     if (!opcode2) {
-        imm = immediateSize1Byte(op, rexW, opsize16, hasModrm);
+        imm = immediateSize1Byte(op, rexW, opsize16, address32, hasModrm);
         if (hasModrm && (op == 0xF6 || op == 0xF7) && (modrmReg == 0 || modrmReg == 1)) {
-            imm = (op == 0xF6) ? 1 : (opsize16 ? 2 : 4);
+            imm = (op == 0xF6) ? 1 : (opsize16 && !rexW ? 2 : 4);
         }
     } else if (opcode3) {
         if (op2 == 0x3A) {
@@ -385,7 +426,7 @@ InsnInfo decode(const uint8_t* code) {
             info.isConditionalJump = true;
             info.isBranch = true;
         }
-        c.pos += static_cast<size_t>(imm);
+        c.skip(static_cast<size_t>(imm));
     }
 
     if (op == 0xC3 || op == 0xC2 || op == 0xCB || op == 0xCA || op == 0xCF) {
@@ -400,7 +441,7 @@ InsnInfo decode(const uint8_t* code) {
         }
         info.isBranch = true;
     }
-    if (!opcode2 && op == 0xFF && hasModrm && modrmReg == 2) {
+    if (!opcode2 && op == 0xFF && hasModrm && (modrmReg == 2 || modrmReg == 3)) {
         info.isCall = true;
         info.isBranch = true;
     }
@@ -408,7 +449,6 @@ InsnInfo decode(const uint8_t* code) {
         info.isBranch = true;
     }
 
-    (void) hadF3;
     info.opcode = op;
     info.opcode2 = opcode2 ? op2 : 0;
     info.hasModrm = hasModrm;
@@ -417,12 +457,14 @@ InsnInfo decode(const uint8_t* code) {
     info.modrmReg = static_cast<uint8_t>(modrmReg);
     info.modrmRm = static_cast<uint8_t>(modrm & 7);
     info.hasSib = hasModrm && ((modrm >> 6) & 3) != 3 && (modrm & 7) == 4;
+    info.rex = rex;
     info.rexW = rexW;
+    info.address32 = address32;
     // The decoder is used to walk a function prologue before overwriting it, so an
     // unknown opcode must be a hard failure, not a guess: guessing a short length
     // would make the caller patch into the middle of an instruction.
     info.len = static_cast<uint8_t>(c.pos);
-    info.valid = c.pos > 0 && c.pos <= 15 && !unknownOpcode;
+    info.valid = c.pos > 0 && !c.failed && !unknownOpcode;
     if (!info.valid) {
         info.len = 0;
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 // Build-time target declaration.
 //
 // This project has exactly one build target: the mcpelauncher mod ABI. Every
@@ -19,6 +21,10 @@ constexpr const char* kGameLibrary = "libminecraftpe.so";
 // ABI directory name mcpelauncher uses inside a version directory, i.e.
 // <version>/lib/<abi>/libminecraftpe.so. Kept in sync with PathHelper::getAbiDir.
 constexpr const char* kSupportedAbi = "x86_64";
+
+// libc++ ABI v1 stores each bool predicate in a 48-byte std::function. This is
+// part of the game entry ABI, not the host test compiler's standard-library ABI.
+constexpr size_t kGamePredicateSize = 48;
 
 // The launcher loads liblog/libdl/libc/libc++ from its own bionic linker, so the
 // mod is an Android shared library even when the host is a desktop Linux.

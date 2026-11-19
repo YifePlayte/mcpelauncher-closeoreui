@@ -7,7 +7,7 @@ namespace coui {
 
 // Registers CloseOreUI entries in mcpelauncher's Mods menu.
 //
-// Must be called from mod_init, once the OreUI config function has been located:
+// Called after the game has registered its config map, even when disabled:
 // the per-screen submenu needs the list of routes the game actually registered,
 // and mcpelauncher's addmenu() appends a *separate top-level menu* on every call,
 // so the whole tree has to be registered in one go.

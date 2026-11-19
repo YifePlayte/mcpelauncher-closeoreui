@@ -13,10 +13,42 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <string>
+#include <vector>
 
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+struct MenuEntryABI {
+    const char* name;
+    void* user;
+    bool (*selected)(void*);
+    void (*click)(void*);
+    size_t length;
+    MenuEntryABI* subentries;
+};
+struct MenuSnapshot {
+    std::string name;
+    void* user;
+    bool (*selected)(void*);
+    void (*click)(void*);
+    std::vector<MenuSnapshot> children;
+};
+int gMenuCalls = 0;
+std::vector<MenuSnapshot> gMenu;
+
+MenuSnapshot copyEntry(const MenuEntryABI& entry) {
+    MenuSnapshot copy{entry.name, entry.user, entry.selected, entry.click, {}};
+    for (size_t i = 0; i < entry.length; ++i) copy.children.push_back(copyEntry(entry.subentries[i]));
+    return copy;
+}
+extern "C" void mcpelauncher_addmenu(size_t length, MenuEntryABI* entries) {
+    ++gMenuCalls;
+    for (size_t i = 0; i < length; ++i) gMenu.push_back(copyEntry(entries[i]));
+}
 
 namespace {
 
@@ -41,6 +73,7 @@ std::string readFile(const std::string& path) {
     std::string out;
     std::string error;
     if (!coui::readFile(path, out, error)) {
+        check(false, "fixture read succeeds");
         return {};
     }
     return out;
@@ -48,7 +81,7 @@ std::string readFile(const std::string& path) {
 
 void writeFile(const std::string& path, const std::string& content) {
     std::string error;
-    coui::writeFileAtomically(path, content, error);
+    check(coui::writeFileAtomically(path, content, error), "fixture write succeeds");
 }
 
 bool contains(const std::string& haystack, const std::string& needle) {
@@ -58,26 +91,27 @@ bool contains(const std::string& haystack, const std::string& needle) {
 // Points the config loader at a private directory so the tests never touch the
 // user's real configuration.
 void setup() {
-    char tmpl[] = "/tmp/closeoreui-test-XXXXXX";
-    const char* dir = mkdtemp(tmpl);
+    const char* base = getenv("TMPDIR");
+    std::string tmpl = std::string(base && *base ? base : "/tmp") + "/closeoreui-test-XXXXXX";
+    const char* dir = mkdtemp(tmpl.data());
     if (dir == nullptr) {
         printf("FAIL: cannot create temp dir\n");
         exit(1);
     }
     gRoot = dir;
     setenv("MCPELAUNCHER_DATA_DIR", gRoot.c_str(), 1);
+    setenv("HOME", (gRoot + "/home").c_str(), 1);
+    setenv("XDG_DATA_HOME", (gRoot + "/xdg").c_str(), 1);
+    setenv("XDG_DATA_DIRS", (gRoot + "/system").c_str(), 1);
+    unsetenv("FLATPAK_ID");
+    std::filesystem::create_directories(gRoot + "/mods/CloseOreUI");
 }
 
 void teardown() {
     if (gRoot.empty()) {
         return;
     }
-    // Only the files this test created live here; a recursive remove of a known
-    // temp path is safe.
-    std::string cmd = "rm -rf '" + gRoot + "'";
-    if (system(cmd.c_str()) != 0) {
-        printf("warning: could not remove %s\n", gRoot.c_str());
-    }
+    std::filesystem::remove_all(gRoot); // only this test's mkdtemp directory
 }
 
 // --- tests -----------------------------------------------------------------
@@ -186,6 +220,83 @@ void testMalformedConfigFallsBack() {
     check(!coui::screenValue("/main-menu"), "malformed file falls back to legacy default");
 }
 
+void testMapValidation() {
+    coui::OreUIConfigMap configs;
+    check(coui::looksLikeConfigMap(&configs), "empty map accepted");
+    configs.reserve(128);
+    check(coui::looksLikeConfigMap(&configs), "empty reserved map accepted");
+    configs["/main-menu"] = {nullptr, nullptr, [] { return true; }, [] { return false; }};
+    check(coui::looksLikeConfigMap(&configs), "populated map with readable route accepted");
+    check(!coui::looksLikeConfigMap(nullptr), "null map rejected");
+    check(!coui::looksLikeConfigMap(reinterpret_cast<void*>(1)), "invalid map address rejected");
+    struct Prefix {
+        const void* buckets;
+        size_t bucketCount;
+        const void* firstNode;
+        size_t size;
+    } prefix{};
+    memcpy(&prefix, &configs, sizeof(prefix));
+    Prefix bad = prefix;
+    bad.size = 200000;
+    check(!coui::looksLikeConfigMap(&bad), "element count limit is not a bucket count limit");
+    bad = prefix;
+    bad.firstNode = reinterpret_cast<void*>(1);
+    check(!coui::looksLikeConfigMap(&bad), "unreadable node rejected");
+    bad = prefix;
+    bad.bucketCount = SIZE_MAX;
+    check(!coui::looksLikeConfigMap(&bad), "overflowing bucket range rejected");
+    const void* next = nullptr;
+    memcpy(&next, prefix.firstNode, sizeof(next));
+    memcpy(const_cast<void*>(prefix.firstNode), &prefix.firstNode, sizeof(prefix.firstNode));
+    check(!coui::looksLikeConfigMap(&configs), "cyclic node list refused before iteration");
+    memcpy(const_cast<void*>(prefix.firstNode), &next, sizeof(next));
+    check(coui::looksLikeConfigMap(&configs), "restored node list remains valid");
+    coui::OreUIConfigMap unrelated;
+    unrelated["not-a-route"] = {nullptr, nullptr, [] { return true; }, [] { return false; }};
+    check(!coui::looksLikeConfigMap(&unrelated), "non-route keys rejected");
+    check(coui::applyConfigToMap(unrelated) == -1, "application validates before reading or modifying entries");
+    check(gMenuCalls == 0, "invalid application registers no menu");
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    void* guard = mmap(nullptr, page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check(guard != MAP_FAILED, "allocate unreadable map fixture");
+    if (guard != MAP_FAILED) {
+        check(!coui::looksLikeConfigMap(guard), "unreadable map header refused without memcpy");
+        munmap(guard, page);
+    }
+}
+
+void testDisabledStartupStillHasMenu() {
+    writeFile(configPath(), "{\"enabled\":false,\"defaultScreenValue\":false,\"screens\":{}}");
+    coui::reloadConfig();
+    coui::OreUIConfigMap configs;
+    for (const char* route : {"/main-menu", "/settings"}) {
+        configs[route] = {nullptr, nullptr, [] { return true; }, [] { return false; }};
+    }
+    check(coui::applyConfigToMap(configs) == 0, "disabled application changes no entries");
+    for (const auto& entry : configs) {
+        check(entry.second.mUnknown3() && !entry.second.mUnknown4(), "disabled predicates untouched");
+    }
+    check(gMenuCalls == 1 && gMenu.size() == 1, "disabled startup registers the menu once");
+    if (gMenu.empty() || gMenu[0].children.size() != 3) {
+        check(false, "disabled menu has global switches and per-screen entries");
+        return;
+    }
+    MenuSnapshot& enabled = gMenu[0].children[0];
+    check(!enabled.selected(enabled.user), "master switch displays disabled state");
+    check(gMenu[0].children[2].children.size() == 2, "disabled startup retains the screen list");
+    enabled.click(enabled.user);
+    check(coui::currentConfig().enabled, "menu can re-enable the mod");
+    check(contains(readFile(configPath()), "\"enabled\": true"), "re-enabled state persisted");
+    for (const auto& entry : configs) {
+        check(entry.second.mUnknown3() && !entry.second.mUnknown4(), "menu does not pretend to hot-reload predicates");
+    }
+    check(coui::applyConfigToMap(configs) == 2, "next registration applies enabled config");
+    check(gMenuCalls == 1, "another registration does not append a duplicate menu");
+    for (const auto& entry : configs) {
+        check(!entry.second.mUnknown3() && !entry.second.mUnknown4(), "both enabled predicates follow legacy default");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -200,6 +311,8 @@ int main() {
     testChangingDefaultPrunesOverrides();
     testMasterSwitchPersists();
     testMalformedConfigFallsBack();
+    testMapValidation();
+    testDisabledStartupStillHasMenu();
 
     teardown();
 

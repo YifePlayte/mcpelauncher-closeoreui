@@ -25,9 +25,8 @@ public:
     InlineHook(const InlineHook&) = delete;
     InlineHook& operator=(const InlineHook&) = delete;
 
-    // `targetEnd` is the exclusive end of the target function (any value beyond
-    // the last byte is acceptable; it is only used to bound the patch). Pass 0
-    // when the end is unknown, in which case a fixed maximum is assumed.
+    // `targetEnd` is a known, readable exclusive function bound. Unknown (0) or
+    // non-increasing bounds are refused before any instruction bytes are read.
     //
     // `original` receives a callable pointer with the same signature as the
     // target. Returns false and fills `error` on failure; the target is left

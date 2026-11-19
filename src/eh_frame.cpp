@@ -179,8 +179,12 @@ bool FunctionTable::build(const ElfImage& image, std::string& error) {
     std::string hdrError;
     if (!parseEhFrameHdr(image, hdrError)) {
         logWarn("no usable .eh_frame_hdr (%s), falling back to FDE scan", hdrError.c_str());
+        // Only fall back when the authoritative binary search table is unusable.
+        // The fallback assumes pcrel|sdata4 for the FDE initial location and does
+        // not read the CIE, so merging it into a working table can inject
+        // addresses that are not function entries.
+        parseEhFrameFdes(image);
     }
-    parseEhFrameFdes(image);
 
     std::sort(starts_.begin(), starts_.end());
     starts_.erase(std::unique(starts_.begin(), starts_.end()), starts_.end());
@@ -324,7 +328,8 @@ void FunctionTable::parseEhFrameFdes(const ElfImage& image) {
     Segment ehSeg;
     bool haveSegment = false;
     for (const Segment& seg : image.segments()) {
-        if (ehFrameAddr >= seg.vaddr && ehFrameAddr < seg.vaddr + seg.memSize) {
+        if ((seg.flags & PF_R) && ehFrameAddr >= seg.vaddr &&
+            ehFrameAddr - seg.vaddr < seg.memSize) {
             ehSeg = seg;
             haveSegment = true;
             break;
@@ -339,33 +344,27 @@ void FunctionTable::parseEhFrameFdes(const ElfImage& image) {
 
     const uint8_t* p = reinterpret_cast<const uint8_t*>(ehFrameAddr);
     const uint8_t* limit = reinterpret_cast<const uint8_t*>(ehSeg.vaddr + ehSeg.memSize);
-    if (limit > hdrEnd) {
-        limit = hdrEnd;
-    }
 
     size_t scanned = 0;
     constexpr size_t kMaxScan = 64u * 1024u * 1024u;
 
-    while (p + 4 <= limit && scanned < kMaxScan) {
-        uint32_t length = static_cast<uint32_t>(readLE(p, 4));
+    while (limit - p >= 4 && scanned < kMaxScan) {
+        uint64_t length = readLE(p, 4);
         size_t headerSize = 4;
 
         if (length == 0) {
             break;
         }
         if (length == 0xFFFFFFFFu) {
-            if (p + 12 > limit) {
+            if (limit - p < 12) {
                 break;
             }
-            uint64_t len64 = readLE(p + 4, 8);
-            if (len64 > static_cast<uint64_t>(limit - p - 12)) {
-                break;
-            }
-            length = static_cast<uint32_t>(len64);
+            length = readLE(p + 4, 8);
             headerSize = 12;
         }
 
-        if (length < 4 || length > static_cast<uint32_t>(limit - p - headerSize)) {
+        if (length < 4 || length > static_cast<uint64_t>(limit - p - headerSize) ||
+            length + headerSize > kMaxScan - scanned) {
             break;
         }
 

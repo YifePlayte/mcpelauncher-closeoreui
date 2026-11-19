@@ -73,10 +73,11 @@ __attribute__((visibility("default"))) void mod_init() {
                   discovery.candidatesConsidered);
 
     for (const auto& candidate : discovery.topCandidates) {
-        coui::logDebug("candidate %p top=%zu routes=%zu refs=%zu size=%zu prologue=%d",
+        coui::logDebug("candidate %p top=%zu routes=%zu refs=%zu size=%zu prologue=%d pairs=%zu mapcalls=%zu verified=%d",
                        reinterpret_cast<void*>(candidate.address), candidate.topLevelRouteCount,
                        candidate.routeCount, candidate.referenceCount, candidate.functionSize,
-                       candidate.prologueScore);
+                        candidate.prologueScore, candidate.predicatePairCount,
+                        candidate.mapCallCount, candidate.registrationShape);
     }
 
     if (!coui::installConfigHook(discovery.configFunction, discovery.configFunctionEnd, error)) {

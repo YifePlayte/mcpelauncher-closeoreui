@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Offline cross-check of the runtime discovery algorithm against a real
-libminecraftpe.so, without loading the game.
+"""Quick route-only candidate analysis of libminecraftpe.so, without loading it.
 
-Mirrors src/discover.cpp: collect route strings from read-only segments, find
+Collect route strings from read-only segments, find
 `lea reg, [rip+disp]` references in .text, group them per function using the
-.eh_frame_hdr binary search table, and rank by distinct route count.
+.eh_frame_hdr binary search table, and rank by route count. This does not perform
+the runtime's registration-shape validation. Use the host-built scan_so tool for
+an exact cross-check; a candidate printed here is not permission to hook it.
 
 Usage: python3 tools/analyze_so.py /path/to/libminecraftpe.so
 """
@@ -285,7 +286,7 @@ def main():
 
     if ranked:
         best_fn, best_top, best_total, names = ranked[0]
-        print(f"\ndiscovered: {best_fn:#x}  top-level screens={best_top}  routes={best_total}")
+        print(f"\nroute-only candidate (not validated): {best_fn:#x}  top-level screens={best_top}  routes={best_total}")
         pro = elf.read_at_vaddr(best_fn, 16)
         print(f"prologue bytes: {pro[:12].hex(' ')}")
 

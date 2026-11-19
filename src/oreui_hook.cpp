@@ -5,7 +5,6 @@
 #include "oreui_config.h"
 
 #include <atomic>
-#include <cstring>
 
 namespace coui {
 namespace {
@@ -19,7 +18,6 @@ using ConfigFunction = void (*)(OreUIConfigMap&, void*, void*, void*, void*, voi
 InlineHook gHook;
 ConfigFunction gOrigin = nullptr;
 std::atomic<uint32_t> gApplyCount{0};
-std::atomic<bool> gWarnedBadMap{false};
 
 void detour(OreUIConfigMap& configs, void* a2, void* a3, void* a4, void* a5, void* a6) {
     // Run the game's own registration first. Everything the map is supposed to
@@ -34,14 +32,8 @@ void detour(OreUIConfigMap& configs, void* a2, void* a3, void* a4, void* a5, voi
         gOrigin(configs, a2, a3, a4, a5, a6);
     }
 
-    if (!looksLikeConfigMap(&configs)) {
-        if (!gWarnedBadMap.exchange(true)) {
-            logError("config map pointer %p looks invalid; leaving the map untouched",
-                     static_cast<void*>(&configs));
-        }
-        return;
-    }
-
+    // applyConfigToMap owns the ABI/node validation, including while disabled.
+    // Do not parse /proc/self/maps and walk the same map a second time here.
     int changed = applyConfigToMap(configs);
     if (changed < 0) {
         return;

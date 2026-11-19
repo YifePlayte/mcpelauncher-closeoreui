@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace coui {
@@ -20,7 +21,14 @@ struct InsnInfo {
     uint8_t modrmReg = 0;  // reg field (or opcode extension)
     uint8_t modrmRm = 0;
     bool hasSib = false;
+    uint8_t sib = 0;
+    uint8_t rex = 0;
     bool rexW = false;
+    bool address32 = false;
+
+    // Displacement of any memory operand (including SIB-based stack operands).
+    uint8_t dispOffset = 0;
+    uint8_t dispSize = 0;
 
     // Instruction has a RIP-relative memory operand (modrm.mod == 0, rm == 5).
     bool ripRelative = false;
@@ -41,12 +49,19 @@ struct InsnInfo {
 
     // RIP-relative LEA: the canonical "address of a string constant" idiom.
     bool isRipLea() const {
-        return valid && ripRelative && hasModrm && modrmMod == 0 && modrmRm == 5 &&
+        return valid && ripRelative && !address32 && hasModrm && modrmMod == 0 && modrmRm == 5 &&
                opcode2 == 0 && opcode == 0x8D;
     }
 };
 
-// Decode one instruction at `code`. Reads at most 15 bytes.
-InsnInfo decode(const uint8_t* code);
+// Decode one instruction, reading no more than min(available, 15) bytes.
+// Truncated and unsupported instructions are invalid. Pointer callers must supply
+// the actual remaining range; an instruction-sized array supplies its own bound.
+InsnInfo decode(const uint8_t* code, size_t available);
+
+template <size_t N>
+InsnInfo decode(const uint8_t (&code)[N]) {
+    return decode(code, N);
+}
 
 }  // namespace coui

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "target.h"
 
 #include <cstdint>
 #include <functional>
@@ -24,16 +25,22 @@ struct OreUIConfigEntry {
 
 using OreUIConfigMap = std::unordered_map<std::string, OreUIConfigEntry>;
 
+#if defined(__ANDROID__)
+static_assert(sizeof(std::function<bool()>) == kGamePredicateSize,
+              "the game requires the libc++ ABI v1 predicate layout");
+static_assert(sizeof(OreUIConfigEntry) == 2 * sizeof(void*) + 2 * kGamePredicateSize);
+#endif
+
 // Plausibility check on a pointer we are about to treat as the config map.
-// Guards against a misidentified hook target taking the game down.
+// Checks the known container layout, readable node chain and route keys. This is
+// an ABI sanity check, not a substitute for identifying the registration function.
 bool looksLikeConfigMap(const void* candidate);
 
 // Applies the current config file to a live map. Returns the number of entries
 // changed, or -1 when the map failed validation.
 int applyConfigToMap(OreUIConfigMap& configs);
 
-// Reloads the config file from disk. Called once at startup and again whenever
-// applyConfigToMap notices the file changed on disk.
+// Reloads the config file from disk. Called once at startup; edits need a restart.
 void reloadConfig();
 
 // Resolves and returns the config file path in use (for logging).
