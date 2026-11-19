@@ -85,6 +85,21 @@ jobs:
 
           echo "== dependencies (launcher and game provided only) =="
           "$BIN/llvm-readelf" -d "$SO" | grep NEEDED
+          # README claims this is enforced, so assert it instead of only printing.
+          mapfile -t needed < <("$BIN/llvm-readelf" -d "$SO" \
+            | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort -u)
+          allowed=(liblog.so libdl.so libc++_shared.so libm.so libc.so)
+          for lib in "${needed[@]}"; do
+            found=0
+            for ok in "${allowed[@]}"; do
+              [[ "$lib" == "$ok" ]] && found=1
+            done
+            if [[ $found -eq 0 ]]; then
+              echo "unexpected dependency: $lib" >&2
+              exit 1
+            fi
+          done
+          echo "dependencies OK (${#needed[@]} entries)"
 
           echo "== version label recorded in the binary =="
           strings "$SO" | grep -F "${{ steps.meta.outputs.version }}" \
@@ -103,10 +118,9 @@ jobs:
           path: dist/*.tar.gz
 
       - name: Publish release
-        # Only tag pushes publish. A manual run is for checking that the build
-        # works — it must not create a release, otherwise every debugging run
-        # leaves a bogus tag behind (which is exactly what happened).
-        if: startsWith(github.ref, 'refs/tags/')
+        # Only a tag push publishes. `github.ref` alone is not enough: a manual
+        # dispatch can target a tag ref, which would publish from a debugging run.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TESTED_WITH: ${{ inputs.tested_with }}
