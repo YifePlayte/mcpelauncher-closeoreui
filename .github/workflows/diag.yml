@@ -1,0 +1,29 @@
+name: diag
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compiler
+        run: g++ --version | head -1
+      - name: Build and run discovery verbose
+        run: |
+          set -euo pipefail
+          mkdir -p build/diag
+          g++ -std=c++20 -g -O1 -Wall -Isrc -pthread tests/discovery_test.cpp \
+            src/x64_decoder.cpp src/eh_frame.cpp src/elf_image.cpp src/inline_hook.cpp \
+            src/discover.cpp src/log.cpp -o build/diag/discovery -ldl
+          ./build/diag/discovery || true
+      - name: Dump the real fixture prologue bytes
+        run: |
+          set -euo pipefail
+          objdump -d --no-show-raw-insn build/diag/discovery | \
+            awk '/<.*oreUiRegister.*>:/{f=1} f{print} f&&/ret/{exit}' | head -60
+      - name: Dump constructPredicates inline expansion
+        run: |
+          set -euo pipefail
+          objdump -d build/diag/discovery | grep -A30 'oreUiRegister' | head -40
